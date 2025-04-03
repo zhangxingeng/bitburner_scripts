@@ -1,106 +1,47 @@
-# Typescript template for Bitburner's Remote File API
+# Bitburner Scripts: Cybernetic Symphony in TypeScript
 
-[Good Script Repo Recent](https://github.com/alainbryden/bitburner-scripts/tree/main)
-The official template for synchronizing Typescript/Javascript from your computer to the game.
+Welcome to the neon-lit corridors of my Bitburner scripts repository—a digital testament to my TypeScript prowess, designed to resonate with the rhythm of the cybernetic underground. In this realm where code intertwines with consciousness, I've crafted a suite of scripts that not only augment your Bitburner experience but also showcase the artistry of TypeScript in the sprawling metropolis of the Net.
 
-[Step by step install](BeginnersGuide.md)
+## Repository Overview
 
-[Docker install guide](DockerGuide.md) (optional)
+Within this repository lies a collection of meticulously engineered scripts, each a cog in the grand machine of Bitburner automation. From orchestrating seamless server infiltrations to optimizing hacknet operations, these scripts are the embodiment of efficiency and elegance in TypeScript.
 
-[Learn more about Typescript](https://www.typescriptlang.org/docs/)
+## Features
 
-## About
+- **Augmentation Automation**: Scripts that navigate the labyrinth of augmentations, ensuring your ascent in the digital hierarchy is both swift and strategic.
+- **Dynamic Deployment**: Real-time adaptation to the ever-evolving landscape of servers, deploying exploits with precision and grace.
+- **Resource Optimization**: Intelligent management of hacknet nodes and other assets, maximizing your digital dominion's growth and sustainability.
 
-This template uses the Typescript compiler and the Remote File API system to synchronize Typescript to your game.
-Due to the usage of the RFA system, it works with Web and Electron (Steam) versions of the game.
+## Getting Started
+
+To synchronize these scripts with your Bitburner environment and embark on your journey through the data streams, follow these steps:
+
+1. **Clone the Repository**: Jack into the mainframe and pull the latest code from the cyber repository.
+   ```bash
+   git clone https://github.com/zhangxingeng/bitburner_scripts.git
+   ```
+2. **Install Dependencies**: Equip your toolkit with the necessary modules to interface with the digital realm.
+   ```bash
+   npm install
+   ```
+3. **Configure the Environment**: Align the scripts with your personal setup by adjusting the configuration files to match your cybernetic signature.
+4. **Deploy to Bitburner**: Upload the scripts into the Bitburner universe, integrating them into your cybernetic arsenal.
 
 ## Prerequisites
 
-[Node.js](https://nodejs.org/en/download/) is needed for compiling typescript and installing dependencies.
+Before you dive into the matrix, ensure your system is equipped with the following:
 
-[See here for step by step installation](BeginnersGuide.md) if you'd like help with installing Node and/or connecting to the game.
+- **Node.js**: The backbone of modern script execution. [Download Node.js](https://nodejs.org/)
+- **Bitburner**: The virtual playground where scripts come to life. [Access Bitburner](https://bitburner.readthedocs.io/)
 
-Alternatively see [Docker install guide](DockerGuide.md) (optional) that installs nodejs and the Remote File API in an isolated container.
+## Contributing
 
-## Quick start
+In the spirit of the open-source ethos, contributions are welcomed. Whether it's refining existing scripts or introducing new functionalities, your input helps evolve this repository into an even more formidable force in the digital realm.
 
-Download the template to your computer and install everything it requires:
+## License
 
-```
-git clone https://github.com/bitburner-official/typescript-template
-cd typescript-template
-npm i
-```
+This project is licensed under the MIT License—an open invitation to innovate, modify, and distribute the code as you see fit.
 
-### How to use this template
+---
 
-Write all your typescript source code in the `/src` directory
-
-To autocompile and send changed files as you save, run `npm run watch` in a terminal.
-Have it running in the background so that it all happens automatically.
-
-For Bitburner to receive any files, you need to enter the port `npm run watch` logs to the terminal
-in the Remote API section of the game settings, and press the connect button.
-
-[See here for step by step installation](BeginnersGuide.md) if you'd like help with installing Node and/or connecting to the game.
-
-Alternatively see [Docker install guide](DockerGuide.md) (optional) that installs nodejs and the Remote File API in an isolated container.
-
-## Advanced
-
-### Imports
-
-To ensure both the game and typescript have no issues with import paths, your import statements should follow a few formatting rules:
-
-- Paths must be absolute from the root of `src/`, which will be equivalent to the root directory of your home drive
-- Paths must contain no leading slash
-- Paths must end with no file extension
-
-#### Examples
-
-To import `helperFunction` from the file `helpers.ts` located in the directory `src/lib/`:
-
-```js
-import { helperFunction } from "lib/helpers";
-```
-
-To import all functions from the file `helpers.ts` located in the `src/lib/` directory as the namespace `helpers`:
-
-```js
-import * as helpers from "lib/helpers";
-```
-
-To import `someFunction` from the file `main.ts` located in the `src/` directory:
-
-```js
-import { someFunction } from "main";
-```
-
-### Debugging
-
-For debugging bitburner on Steam you will need to enable a remote debugging port. This can be done by rightclicking bitburner in your Steam library and selecting properties. There you need to add `--remote-debugging-port=9222` [Thanks @DarkMio]
-
-### Using React
-
-Some `ns` functions, like [`ns.printRaw()`](https://github.com/bitburner-official/bitburner-src/blob/dev/markdown/bitburner.ns.printraw.md) allows you to render React components into the game interface.
-
-The game already exposes the `React` and `ReactDOM` objects globally, but in order to work with strongly typed versions in `.ts` files, you can use the included typings. To do this, use the following import:
-
-`import React, { ReactDOM } from '@react'`
-
-Support for jsx is also included, so if you use the `.tsx` file ending, you can do something like:
-
-```ts
-import { NS } from '@ns';
-import React from '@react';
-
-interface IMyContentProps {
-  name: string
-}
-
-const MyContent = ({name}: IMyContentProps) => <span>Hello {name}</span>;
-
-export default async function main(ns: NS){
-  ns.printRaw(<MyContent name="Your name"></MyContent>);
-}
-```
+Step into the neon glow of the cyber future. Let these scripts be your guide through the pulsating veins of the digital underworld, showcasing not just the power of automation, but the artistry of TypeScript in the cybernetic age.
