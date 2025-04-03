@@ -1,0 +1,26 @@
+{
+    "[javascript]": {
+        "editor.defaultFormatter": "dbaeumer.vscode-eslint"
+    },
+    "editor.tabSize": 4,
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "explicit"
+    },
+    "eslint.enable": true,
+    "eslint.validate": [
+        "javascript",
+        "typescript"
+    ],
+    "eslint.format.enable": true,
+    "eslint.useFlatConfig": true,
+    "eslint.options": {
+        "overrideConfigFile": "eslint.config.js"
+    },
+    "files.exclude": {
+        "**/*.rpyc": true,
+        "**/*.rpa": true,
+        "**/*.rpymc": true,
+        "**/cache/": true
+    }
+}
