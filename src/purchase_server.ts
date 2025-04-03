@@ -5,7 +5,7 @@ import { formatRam, padNum } from './utils';
 export async function main(ns: NS): Promise<void> {
     // check argument legth first
     const args = ns.args;
-    if (args.length > 0) {
+    if (args.length === 0) {
         ns.disableLog('ALL');
         ns.ui.openTail();
         ns.ui.setTailTitle('Purchase Server');
