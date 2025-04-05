@@ -6,7 +6,8 @@ const PORT_OPENER_COSTS: [string, number][] = [
     ['FTPCrack.exe', 1500000],
     ['relaySMTP.exe', 5000000],
     ['HTTPWorm.exe', 30000000],
-    ['SQLInject.exe', 250000000]
+    ['SQLInject.exe', 250000000],
+    ['Formulas.exe', 5000000000]
 ];
 
 export async function main(ns: NS): Promise<void> {

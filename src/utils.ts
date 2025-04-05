@@ -214,16 +214,19 @@ export function calculateServerScore(ns: NS, server: string): number {
     return score;
 }
 
+
 /**
- * Formats RAM amount for display
- * @param ram - RAM amount in GB
- * @returns Formatted RAM string
+ * Format RAM to human-readable string
  */
 export function formatRam(ram: number): string {
-    if (ram >= 1024) {
-        return `${(ram / 1024).toFixed(2)}TB`;
+    const units = ['GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    let unit = units[0];
+    for (let i = 0; i < units.length; i++) {
+        if (ram >= Math.pow(1024, i + 1)) {
+            unit = units[i];
+        }
     }
-    return `${ram.toFixed(2)}GB`;
+    return `${(ram / Math.pow(1024, units.indexOf(unit))).toFixed(2)}${unit}`;
 }
 
 /**
@@ -295,14 +298,18 @@ export function formatPercent(n: number): string {
 /**
  * Format a duration in milliseconds to a readable string
  * @param ms - Duration in milliseconds
- * @returns Formatted duration string
+ * @param precise - Whether to show milliseconds (default: false)
+ * @returns Formatted duration string in HH:MM:SS or HH:MM:SS:UUU format
  */
-export function formatTime(ms: number): string {
-    const hours = ms / (1000 * 60 * 60);
-    if (hours > 2) {
-        return `${hours.toFixed(1)} hr`;
-    }
-    return `${(ms / (1000 * 60)).toFixed(1)} min`;
+export function formatTime(ms: number, precise = false): string {
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    const seconds = Math.floor((ms % (1000 * 60)) / 1000);
+    const milliseconds = ms % 1000;
+    const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    let msStr = '';
+    if (precise) { msStr = `:${String(seconds).padStart(2, '0')}:${String(milliseconds).padStart(3, '0')}`; }
+    return `${timeStr}${msStr}`;
 }
 
 /**
@@ -378,5 +385,199 @@ export function prettyDisplay(ns: NS, lines: string[]): void {
     const padding_lines = max_lines - lines.length;
     for (let i = 0; i < padding_lines; i++) { ns.print('\n'); }
     for (const line of lines) { ns.print(line); }
+}
+
+/**
+ * Get servers that can be hacked by the player based on hacking level
+ * @param {NS} ns - Netscript API
+ * @param {string[]} servers - List of servers to filter
+ * @returns {string[]} List of hackable servers sorted by hacking level
+ */
+export function getHackableServers(ns: NS, servers?: string[]): string[] {
+    const serverList = servers || findAllServers(ns);
+    const hackLevel = ns.getHackingLevel();
+
+    return serverList.filter(server => {
+        // Skip purchased servers and home
+        if (server === 'home' || ns.getPurchasedServers().includes(server)) {
+            return false;
+        }
+
+        // Only include rooted servers with money that we can hack
+        const requiredLevel = ns.getServerRequiredHackingLevel(server);
+        const hasMaxMoney = ns.getServerMaxMoney(server) > 0;
+        const hasRootAccess = ns.hasRootAccess(server);
+
+        return hasRootAccess && hasMaxMoney && requiredLevel <= hackLevel;
+    }).sort((a, b) => {
+        // Sort by required hacking level (ascending)
+        return ns.getServerRequiredHackingLevel(a) - ns.getServerRequiredHackingLevel(b);
+    });
+}
+
+/**
+ * Calculate the value of a server for targeting purposes
+ * @param {NS} ns - The Netscript API
+ * @param {string} target - Target server
+ * @returns {number} Server value score
+ */
+export function calculateServerValue(ns: NS, target: string): number {
+    const maxMoney = ns.getServerMaxMoney(target);
+    const minSecurity = ns.getServerMinSecurityLevel(target);
+    const hackChance = ns.hackAnalyzeChance(target);
+    const hackTime = ns.getHackTime(target);
+
+    // Calculate a balanced score based on multiple factors
+    const moneyScore = maxMoney;
+    const securityScore = 1 / (minSecurity + 1); // Lower security is better
+    const timeScore = 1 / (hackTime / 1000 + 1); // Faster hack time is better
+    const chanceScore = hackChance;
+
+    // Combined score with weights
+    const score = moneyScore * securityScore * timeScore * chanceScore;
+    return score;
+}
+
+/**
+ * Copy a batch script to a target server if it doesn't exist
+ * @param {NS} ns - Netscript API
+ * @param {string} script - Script path
+ * @param {string} targetServer - Target server
+ * @returns {boolean} - Whether the script exists on the target server
+ */
+export function ensureScriptExists(ns: NS, script: string, targetServer: string): boolean {
+    if (!ns.fileExists(script, targetServer)) {
+        return ns.scp(script, targetServer, 'home');
+    }
+    return true;
+}
+
+/**
+ * Calculate threads needed for a weaken operation to reach min security
+ * @param {NS} ns - Netscript API
+ * @param {string} target - Target server
+ * @param {number} securityDecrease - Amount of security decreased per thread
+ * @returns {number} - Number of threads needed
+ */
+export function calculateWeakenThreads(ns: NS, target: string, securityDecrease: number = 0.05): number {
+    const currentSecurity = ns.getServerSecurityLevel(target);
+    const minSecurity = ns.getServerMinSecurityLevel(target);
+    const securityDiff = Math.max(0, currentSecurity - minSecurity);
+    return Math.ceil(securityDiff / securityDecrease);
+}
+
+/**
+ * Calculate threads needed for a grow operation to reach max money
+ * @param {NS} ns - Netscript API
+ * @param {string} target - Target server
+ * @returns {number} - Number of threads needed
+ */
+export function calculateGrowThreads(ns: NS, target: string): number {
+    const currentMoney = Math.max(1, ns.getServerMoneyAvailable(target));
+    const maxMoney = ns.getServerMaxMoney(target);
+
+    // If we have Formulas.exe, use it for more accurate calculation
+    if (ns.fileExists('Formulas.exe', 'home')) {
+        const server = ns.getServer(target);
+        const player = ns.getPlayer();
+        server.moneyAvailable = currentMoney;
+        return Math.ceil(ns.formulas.hacking.growThreads(
+            server, player, maxMoney, 1 // Use 1 core
+        ));
+    } else {
+        // Fallback to growthAnalyze
+        const growthFactor = maxMoney / currentMoney;
+        return Math.ceil(ns.growthAnalyze(target, growthFactor));
+    }
+}
+
+/**
+ * Reserve RAM on a specific host, or distribute across available hosts
+ * @param {NS} ns - Netscript API
+ * @param {number} ramAmount - Amount of RAM to reserve
+ * @param {ServerHost} servers - List of server hosts and their RAM info
+ * @param {string} host - Optional specific host to reserve RAM on
+ * @returns {boolean} - Whether the reservation was successful
+ */
+export function reserveRamOnHost(
+    ns: NS,
+    ramAmount: number,
+    servers: { host: string, freeRam: number }[],
+    host?: string
+): boolean {
+    if (host) {
+        // Find the specific server
+        const server = servers.find(s => s.host === host);
+        if (!server || server.freeRam < ramAmount) return false;
+
+        // Update the free RAM on this server
+        server.freeRam -= ramAmount;
+        return true;
+    } else {
+        // Distribute RAM across all servers
+        // Sort servers by free RAM (ascending) to use smaller chunks first
+        servers.sort((a, b) => a.freeRam - b.freeRam);
+
+        let remaining = ramAmount;
+        for (const server of servers) {
+            if (remaining <= 0) break;
+
+            const amountToReserve = Math.min(remaining, server.freeRam);
+            server.freeRam -= amountToReserve;
+            remaining -= amountToReserve;
+        }
+
+        return remaining <= 0;
+    }
+}
+
+/**
+ * Distribute a batch of threads across available servers
+ * @param {NS} ns - Netscript API
+ * @param {string} script - Script to run
+ * @param {number} threads - Total threads needed
+ * @param {ServerHost[]} servers - Available servers with free RAM
+ * @param {any[]} args - Script arguments
+ * @returns {boolean} - Whether all threads were successfully distributed
+ */
+export function distributeThreads(
+    ns: NS,
+    script: string,
+    threads: number,
+    servers: { host: string, freeRam: number }[],
+    ...args: any[]
+): boolean {
+    if (threads <= 0) return true;
+
+    const scriptRam = ns.getScriptRam(script);
+    let remainingThreads = threads;
+
+    // Sort servers by free RAM (descending)
+    const sortedServers = [...servers].sort((a, b) => b.freeRam - a.freeRam);
+
+    for (const server of sortedServers) {
+        if (remainingThreads <= 0) break;
+
+        // Calculate how many threads we can run on this server
+        const maxThreads = Math.floor(server.freeRam / scriptRam);
+        if (maxThreads <= 0) continue;
+
+        const threadsToRun = Math.min(maxThreads, remainingThreads);
+
+        // Copy script if needed
+        if (!ensureScriptExists(ns, script, server.host)) {
+            continue;
+        }
+
+        // Run the script
+        const pid = ns.exec(script, server.host, threadsToRun, ...args);
+
+        if (pid > 0) {
+            remainingThreads -= threadsToRun;
+            server.freeRam -= threadsToRun * scriptRam;
+        }
+    }
+
+    return remainingThreads === 0;
 }
 

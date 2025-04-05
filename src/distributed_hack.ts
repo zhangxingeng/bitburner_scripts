@@ -1,6 +1,12 @@
 import { NS } from '@ns';
-import { scanAndNuke, copyScripts, calculateServerScore, formatTime, formatRam, formatMoney, prettyDisplay } from './utils';
-// Updated script paths to point to batch scripts
+import {
+    scanAndNuke, formatTime, formatRam, formatMoney, formatPercent, findAllServers,
+    getHackableServers, calculateServerValue, ensureScriptExists, calculateWeakenThreads,
+    calculateGrowThreads, distributeThreads, reserveRamOnHost
+} from './utils';
+import { AutoGrowManager, RamManager, IRamManager, AutoGrowConfig } from './lib/auto_grow';
+
+// Script paths for various operations
 const SCRIPT_PATH = {
     hack: 'remote_batch/hack.js',
     weaken: 'remote_batch/weaken.js',
@@ -9,39 +15,25 @@ const SCRIPT_PATH = {
     solveContracts: 'remote/solve-contracts.js',
 };
 
+// RAM usage for different scripts
 const SCRIPT_RAM = {
     slaveScript: 1.75,    // RAM usage in GB for weaken/hack/grow scripts
     shareScript: 4.0,     // RAM usage in GB for share script
-    solveContractsScript: 22.0, // RAM usage in GB for solve-contracts script
+    solveContractsScript: 22.0 // RAM usage in GB for solve-contracts script
 };
 
-// Restructured CONFIG with additional batch-specific settings
+// Configuration settings
 const CONFIG = {
-    maxParallelAttacks: 60,
-    thresholds: {
-        ramUsageLow: 0.8,
-        ramUsageHigh: 0.9,
-        securityThresholdOffset: 2, // Tightened security threshold for batching
-        moneyThresholdPercentage: 0.9, // Higher money threshold for batching
-        minimumServerRam: 1.6,
-        hackMoneyRatioMin: 0.01,
-        hackMoneyRatioMax: 0.5 // Reduced from 0.99 to avoid emptying servers
-    },
+    maxParallelAttacks: 1000,
     timing: {
-        cycleSleep: 200,
-        maxThreadCalculationTime: 240000, // 4 minutes timeout for thread calculations
+        cycleSleep: 2000,
+        maxThreadCalculationTime: 240000, // 4 minutes timeout
     },
     ram: {
         useHomeRam: true,
-        reservedHomeRamPercentage: 0.2,
-        maxReserveHomeRAM: 256,
+        reservedHomeRamPercentage: 0.15,
+        maxReserveHomeRAM: 128,
         minReserveHomeRam: 32,
-        ignoreServersLowerThanPurchased: true
-    },
-    serverPurchase: {
-        cashRatio: 0.9,
-        maxPurchasedRam: 1048576,
-        minCashReserve: 10000000
     },
     security: {
         growThreadSecurityIncrease: 0.004,
@@ -50,32 +42,20 @@ const CONFIG = {
     },
     features: {
         solveContracts: true,
-        useTimedThreadAdjustment: true,
     },
-    // New batch-specific configuration
     batch: {
         enabled: true,
-        batchSpacing: 200, // Milliseconds between batches
-        operationDelay: 50, // Milliseconds between operations in a batch
-        maxBatchesPerTarget: 20, // Maximum number of batches to schedule at once
-        silentMisfires: true, // Suppress misfire warnings
-        debugLogs: false, // Enable detailed batch logging
-        prepSecurity: 1, // Extra security buffer during preparation
-        prepMoneyThreshold: 0.95, // Money threshold for preparation completion
-        targetHackPercentage: 0.1, // Target amount to hack per batch (10%)
+        batchSpacing: 100,          // ms between each batch
+        operationDelay: 50,         // ms between each operation in a batch
+        maxBatchesPerTarget: 5,     // max batches per target
+        silentMisfires: true,       // avoid printing toast messages for misfires
+        debugLogs: false,           // detailed debug logs (can be very verbose)
+        prepSecurity: 3,            // security threshold for preparation
+        prepMoneyThreshold: 0.9,    // money threshold for preparation
+        targetHackPercentage: 0.25, // percentage of money to hack per batch
+        prioritizeHighValue: true,  // prioritize high-value servers
+        maxTargetsPerCycle: 8,      // maximum targets to process per cycle
     }
-};
-
-// Add stock market manipulation configuration
-const STOCK_MANIPULATION_CONFIG = {
-    enabled: true,
-    manipulationThreshold: 0.02,
-    maxManipulationServers: 5,
-    manipulationCooldown: 60000,
-    hackEffect: -0.01,
-    growEffect: 0.01,
-    minServerMoney: 1e6,
-    maxSecurityOffset: 5
 };
 
 // Core interfaces for batch hacking
@@ -122,369 +102,11 @@ interface AttackStrategy {
     maxStealPercentage: number;
 }
 
-interface ServerRamInfo {
-    host: string;
-    freeRam: number;
-    maxRam: number;
-    hasCapacityFor: (threads: number) => boolean;
-}
-
-// RamUsage Class Implementation
-class RamUsage {
-    private _serverRams: ServerRamInfo[] = [];
-
-    get overallFreeRam(): number {
-        return this._serverRams.reduce((sum, server) => sum + server.freeRam, 0);
-    }
-
-    get overallMaxRam(): number {
-        return this._serverRams.reduce((sum, server) => sum + server.maxRam, 0);
-    }
-
-    get utilization(): number {
-        return this.overallMaxRam > 0
-            ? (this.overallMaxRam - this.overallFreeRam) / this.overallMaxRam
-            : 0;
-    }
-
-    addServer(host: string, freeRam: number, maxRam: number): void {
-        this._serverRams.push({
-            host,
-            freeRam,
-            maxRam,
-            hasCapacityFor: (threads: number) => freeRam >= SCRIPT_RAM.slaveScript * threads
-        });
-    }
-
-    reserveRam(amount: number, serverHost?: string): void {
-        if (serverHost) {
-            // Reduce RAM on specific server
-            const server = this._serverRams.find(s => s.host === serverHost);
-            if (server) {
-                server.freeRam = Math.max(0, server.freeRam - amount);
-            }
-        } else {
-            // Distribute across servers
-            const totalToReserve = Math.min(amount, this.overallFreeRam);
-            let remaining = totalToReserve;
-
-            // Sort servers by free RAM (ascending) to use smaller chunks first
-            this._serverRams.sort((a, b) => a.freeRam - b.freeRam);
-
-            for (const server of this._serverRams) {
-                if (remaining <= 0) break;
-
-                const amountToReserve = Math.min(remaining, server.freeRam);
-                server.freeRam -= amountToReserve;
-                remaining -= amountToReserve;
-            }
-        }
-    }
-
-    get serverRams(): ServerRamInfo[] {
-        return [...this._serverRams]; // Return a copy to prevent direct modification
-    }
-}
-
-// Global variables
+// Track server values and batch counts
 const profitsMap = new Map<string, number>();
-const activeBatches = new Map<string, number>(); // Track active batches per target
-const lastManipulationTime = 0;
-const manipulatedStocks = new Map<string, number>();
-// Map to track server preparation status
-const serverPreparationState = new Map<string, 'none' | 'weakening' | 'growing' | 'ready'>();
 
 /**
- * ServerPreparationManager - Handles preparing servers for batch hacking
- */
-class ServerPreparationManager {
-    private ns: NS;
-
-    constructor(ns: NS) {
-        this.ns = ns;
-    }
-
-    /**
-     * Check if a server is prepared for batch hacking
-     * @param {string} target - Target server
-     * @returns {boolean} Whether the server is ready for batching
-     */
-    isServerPrepared(target: string): boolean {
-        const securityLevel = this.ns.getServerSecurityLevel(target);
-        const minSecurityLevel = this.ns.getServerMinSecurityLevel(target);
-        const currentMoney = this.ns.getServerMoneyAvailable(target);
-        const maxMoney = this.ns.getServerMaxMoney(target);
-
-        // Check if security is at minimum (with small buffer)
-        const securityReady = securityLevel <= minSecurityLevel + CONFIG.batch.prepSecurity;
-
-        // Check if money is at maximum (with configured threshold)
-        const moneyReady = currentMoney >= maxMoney * CONFIG.batch.prepMoneyThreshold;
-
-        return securityReady && moneyReady;
-    }
-
-    /**
-     * Get the current preparation state of a server
-     * @param {string} target - Target server
-     * @returns {string} Current preparation state
-     */
-    getPreparationState(target: string): 'none' | 'weakening' | 'growing' | 'ready' {
-        // Get current state or default to 'none'
-        const currentState = serverPreparationState.get(target) || 'none';
-
-        // If already marked as ready, quick return
-        if (currentState === 'ready' && this.isServerPrepared(target)) {
-            return 'ready';
-        }
-
-        // Check actual server state
-        const securityLevel = this.ns.getServerSecurityLevel(target);
-        const minSecurityLevel = this.ns.getServerMinSecurityLevel(target);
-        const currentMoney = this.ns.getServerMoneyAvailable(target);
-        const maxMoney = this.ns.getServerMaxMoney(target);
-
-        // If both conditions met, server is ready
-        if (securityLevel <= minSecurityLevel + CONFIG.batch.prepSecurity &&
-            currentMoney >= maxMoney * CONFIG.batch.prepMoneyThreshold) {
-            serverPreparationState.set(target, 'ready');
-            return 'ready';
-        }
-
-        // Check security first - weaken has priority over grow
-        if (securityLevel > minSecurityLevel + CONFIG.batch.prepSecurity) {
-            serverPreparationState.set(target, 'weakening');
-            return 'weakening';
-        }
-
-        // If security is good but money is low, we're growing
-        if (currentMoney < maxMoney * CONFIG.batch.prepMoneyThreshold) {
-            serverPreparationState.set(target, 'growing');
-            return 'growing';
-        }
-
-        // Default to existing state
-        return currentState;
-    }
-
-    /**
-     * Prepare a server for batch hacking
-     * @param {string} target - Target server
-     * @param {RamUsage} freeRams - Available RAM
-     * @returns {Promise<boolean>} Whether preparation actions were taken
-     */
-    async prepareServer(target: string, freeRams: RamUsage): Promise<boolean> {
-        const state = this.getPreparationState(target);
-
-        if (state === 'ready') {
-            return false; // No preparation needed
-        }
-
-        if (state === 'weakening') {
-            return this.weakenServer(target, freeRams);
-        }
-
-        if (state === 'growing') {
-            return this.growServer(target, freeRams);
-        }
-
-        // If state is 'none', start with weakening
-        return this.weakenServer(target, freeRams);
-    }
-
-    /**
-     * Weaken a server to minimum security
-     * @param {string} target - Target server
-     * @param {RamUsage} freeRams - Available RAM
-     * @returns {boolean} Whether weaken was started
-     */
-    weakenServer(target: string, freeRams: RamUsage): boolean {
-        const securityLevel = this.ns.getServerSecurityLevel(target);
-        const minSecurityLevel = this.ns.getServerMinSecurityLevel(target);
-
-        // If security is already at minimum, move to growing
-        if (securityLevel <= minSecurityLevel + CONFIG.batch.prepSecurity) {
-            serverPreparationState.set(target, 'growing');
-            return this.growServer(target, freeRams);
-        }
-
-        // Calculate security difference and required threads
-        const securityDiff = securityLevel - minSecurityLevel;
-        const requiredThreads = Math.ceil(securityDiff / CONFIG.security.weakenSecurityDecrease);
-
-        // Check if we have enough RAM
-        if (freeRams.overallFreeRam < requiredThreads * SCRIPT_RAM.slaveScript) {
-            // Try with half the threads if full amount not available
-            const halfThreads = Math.ceil(requiredThreads / 2);
-            if (freeRams.overallFreeRam < halfThreads * SCRIPT_RAM.slaveScript) {
-                // Try with minimum viable threads (at least make some progress)
-                const minThreads = Math.floor(freeRams.overallFreeRam / SCRIPT_RAM.slaveScript);
-                if (minThreads > 0) {
-                    return this.executePreparationTask(SCRIPT_PATH.weaken, minThreads, target, freeRams);
-                }
-                return false;
-            }
-            return this.executePreparationTask(SCRIPT_PATH.weaken, halfThreads, target, freeRams);
-        }
-
-        // Execute weaken with full required threads
-        return this.executePreparationTask(SCRIPT_PATH.weaken, requiredThreads, target, freeRams);
-    }
-
-    /**
-     * Grow a server to maximum money
-     * @param {string} target - Target server
-     * @param {RamUsage} freeRams - Available RAM
-     * @returns {boolean} Whether grow was started
-     */
-    growServer(target: string, freeRams: RamUsage): boolean {
-        const securityLevel = this.ns.getServerSecurityLevel(target);
-        const minSecurityLevel = this.ns.getServerMinSecurityLevel(target);
-
-        // If security is above minimum, go back to weakening
-        if (securityLevel > minSecurityLevel + CONFIG.batch.prepSecurity) {
-            serverPreparationState.set(target, 'weakening');
-            return this.weakenServer(target, freeRams);
-        }
-
-        const currentMoney = this.ns.getServerMoneyAvailable(target);
-        const maxMoney = this.ns.getServerMaxMoney(target);
-
-        // If money is already at max, mark as ready
-        if (currentMoney >= maxMoney * CONFIG.batch.prepMoneyThreshold) {
-            serverPreparationState.set(target, 'ready');
-            return false;
-        }
-
-        // Special case: if money is zero, add $1 before growing
-        if (currentMoney <= 1) {
-            // Execute a minimal grow to get money on the server
-            if (freeRams.overallFreeRam >= SCRIPT_RAM.slaveScript) {
-                return this.executePreparationTask(SCRIPT_PATH.grow, 1, target, freeRams);
-            }
-            return false;
-        }
-
-        // Calculate growth factor needed
-        const growthFactor = maxMoney / currentMoney;
-
-        // Calculate grow threads needed
-        let growThreads;
-        if (this.ns.fileExists('Formulas.exe')) {
-            const server = this.ns.getServer(target);
-            const player = this.ns.getPlayer();
-            server.moneyAvailable = currentMoney;
-            growThreads = Math.ceil(this.ns.formulas.hacking.growThreads(
-                server, player, maxMoney, this.ns.getServer('home').cpuCores
-            ));
-        } else {
-            growThreads = Math.ceil(this.ns.growthAnalyze(target, growthFactor));
-        }
-
-        // Calculate security increase from grow
-        const growSecurityIncrease = this.ns.growthAnalyzeSecurity(growThreads);
-
-        // Calculate weaken threads needed to counter grow security increase
-        const weakenThreads = Math.ceil(growSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
-
-        // Calculate total RAM needed
-        const totalRamNeeded = (growThreads + weakenThreads) * SCRIPT_RAM.slaveScript;
-
-        // Check if we have enough RAM for both grow and weaken
-        if (freeRams.overallFreeRam < totalRamNeeded) {
-            // Try with fewer threads
-            const scaleFactor = Math.floor(freeRams.overallFreeRam / totalRamNeeded * 100) / 100;
-            if (scaleFactor <= 0) return false;
-
-            const adjustedGrowThreads = Math.max(1, Math.floor(growThreads * scaleFactor));
-            const adjustedWeakenThreads = Math.max(1, Math.floor(weakenThreads * scaleFactor));
-
-            // Execute grow and weaken with adjusted threads
-            const growSuccess = this.executePreparationTask(SCRIPT_PATH.grow, adjustedGrowThreads, target, freeRams);
-            if (!growSuccess) return false;
-
-            return this.executePreparationTask(SCRIPT_PATH.weaken, adjustedWeakenThreads, target, freeRams);
-        }
-
-        // Execute grow and weaken with full threads
-        const growSuccess = this.executePreparationTask(SCRIPT_PATH.grow, growThreads, target, freeRams);
-        if (!growSuccess) return false;
-
-        return this.executePreparationTask(SCRIPT_PATH.weaken, weakenThreads, target, freeRams);
-    }
-
-    /**
-     * Execute a preparation task with distributed threads
-     * @param {string} script - Script to run
-     * @param {number} threads - Number of threads
-     * @param {string} target - Target server
-     * @param {RamUsage} freeRams - Available RAM
-     * @returns {boolean} Whether the task was started
-     */
-    executePreparationTask(script: string, threads: number, target: string, freeRams: RamUsage): boolean {
-        if (threads <= 0) return false;
-
-        const scriptRam = this.ns.getScriptRam(script);
-        const totalRamNeeded = scriptRam * threads;
-
-        // Check if we have enough RAM
-        if (freeRams.overallFreeRam < totalRamNeeded) {
-            return false;
-        }
-
-        // Get servers with free RAM
-        const serverRamsCopy = freeRams.serverRams;
-
-        // Sort by free RAM (descending)
-        serverRamsCopy.sort((a, b) => b.freeRam - a.freeRam);
-
-        let remainingThreads = threads;
-
-        for (const serverRamInfo of serverRamsCopy) {
-            if (remainingThreads <= 0) break;
-
-            const maxThreads = Math.floor(serverRamInfo.freeRam / scriptRam);
-            if (maxThreads <= 0) continue;
-
-            const threadsToRun = Math.min(maxThreads, remainingThreads);
-
-            // Copy script if needed
-            if (!this.ns.fileExists(script, serverRamInfo.host)) {
-                if (!this.ns.scp(script, serverRamInfo.host, 'home')) {
-                    this.ns.write('/tmp/log.txt', `Failed to copy ${script} to ${serverRamInfo.host}\n`, 'a');
-                    continue;
-                }
-            }
-
-            // For preparation tasks, we use a simpler approach without timing
-            // The loopingMode flag (last parameter) is set to true to keep the script running
-            const args = [
-                target,                // Target server
-                Date.now(),            // Start time (immediately)
-                0,                     // No specific duration
-                `prep-${script.split('/').pop()?.split('.')[0]}`, // Description
-                false,                 // No stock manipulation
-                true,                  // Silent misfires
-                true                   // Looping mode
-            ];
-
-            const pid = this.ns.exec(script, serverRamInfo.host, threadsToRun, ...args);
-
-            if (pid > 0) {
-                remainingThreads -= threadsToRun;
-                freeRams.reserveRam(threadsToRun * scriptRam, serverRamInfo.host);
-            } else {
-                const errorMsg = `Failed to execute ${script} on ${serverRamInfo.host} with ${threadsToRun} threads`;
-                this.ns.write('/tmp/log.txt', errorMsg + '\n', 'a');
-            }
-        }
-
-        return remainingThreads === 0;
-    }
-}
-
-/**
- * BatchScheduler class - handles scheduling and execution of batched operations
+ * BatchScheduler - Handles scheduling and execution of batched operations
  */
 class BatchScheduler {
     private ns: NS;
@@ -497,36 +119,31 @@ class BatchScheduler {
 
     /**
      * Calculate timing schedule for a batch
-     * @param {Date} startTime - When to start the batch
-     * @param {string} target - Target server
-     * @returns {BatchTimings} Timing schedule for all operations
      */
     calculateBatchTiming(startTime: Date, target: string): BatchTimings {
         // Get operation times
         const hackTime = this.ns.getHackTime(target);
         const growTime = this.ns.getGrowTime(target);
         const weakenTime = this.ns.getWeakenTime(target);
-
-        // Delay between operations to ensure proper execution order
         const delayBetweenOperations = CONFIG.batch.operationDelay;
 
         // We want operations to complete in this order: 
         // Hack -> Weaken1 -> Grow -> Weaken2
-        // with a delay of delayBetweenOperations milliseconds between each completion
+        // with a delay between each completion
 
-        // First determine when each operation should complete
+        // Calculate completion times (working backward)
         const weaken2End = new Date(startTime.getTime() + weakenTime);
         const growEnd = new Date(weaken2End.getTime() - delayBetweenOperations);
         const weaken1End = new Date(growEnd.getTime() - delayBetweenOperations);
         const hackEnd = new Date(weaken1End.getTime() - delayBetweenOperations);
 
-        // Then determine when each operation should start
+        // Calculate start times based on completion times
         const hackStart = new Date(hackEnd.getTime() - hackTime);
         const weaken1Start = new Date(weaken1End.getTime() - weakenTime);
         const growStart = new Date(growEnd.getTime() - growTime);
         const weaken2Start = new Date(weaken2End.getTime() - weakenTime);
 
-        // Find first operation to end and last operation to start
+        // Find first operation to end and last to start for overall timing
         const firstEnd = hackEnd;
         const lastStart = new Date(
             Math.max(
@@ -554,13 +171,8 @@ class BatchScheduler {
 
     /**
      * Schedule a batch of operations for a target server
-     * @param {string} target - Target server
-     * @param {RamUsage} freeRams - Available RAM
-     * @param {number} hackMoneyRatio - Percentage of money to hack
-     * @returns {boolean} Whether the batch was successfully scheduled
      */
-    scheduleHWGWBatch(target: string, freeRams: RamUsage, hackMoneyRatio: number): boolean {
-        // Get current active batch count for this target
+    scheduleHWGWBatch(target: string, ramManager: IRamManager, hackMoneyRatio: number): boolean {
         const currentBatches = this.activeBatchCount.get(target) || 0;
 
         // Don't exceed max concurrent batches per target
@@ -568,25 +180,20 @@ class BatchScheduler {
             return false;
         }
 
-        // Calculate start time for this batch
+        // Calculate batch timing
         const startTime = new Date(Date.now() + CONFIG.batch.batchSpacing * currentBatches);
-
-        // Get timing schedule
         const timings = this.calculateBatchTiming(startTime, target);
 
-        // Calculate strategy (thread counts)
+        // Calculate thread strategy
         const strategy = this.calculateBatchStrategy(target, hackMoneyRatio);
 
-        // We need enough RAM for all operations
-        const totalThreads =
-            strategy.hackThreads +
-            strategy.weakenForHackThreads +
-            strategy.growThreads +
-            strategy.weakenThreads;
+        // Check if we have enough RAM
+        const totalThreads = strategy.hackThreads + strategy.weakenForHackThreads +
+            strategy.growThreads + strategy.weakenThreads;
 
         const totalRamNeeded = totalThreads * SCRIPT_RAM.slaveScript;
 
-        if (freeRams.overallFreeRam < totalRamNeeded) {
+        if (ramManager.getTotalFreeRam() < totalRamNeeded) {
             return false;
         }
 
@@ -598,8 +205,7 @@ class BatchScheduler {
                 startTime: timings.hackStart,
                 endTime: timings.hackEnd,
                 threads: strategy.hackThreads,
-                target,
-                manipulateStock: false
+                target
             },
             {
                 description: 'weaken1',
@@ -615,8 +221,7 @@ class BatchScheduler {
                 startTime: timings.growStart,
                 endTime: timings.growEnd,
                 threads: strategy.growThreads,
-                target,
-                manipulateStock: false
+                target
             },
             {
                 description: 'weaken2',
@@ -628,7 +233,7 @@ class BatchScheduler {
             }
         ];
 
-        // Create batch plan
+        // Create and execute batch plan
         const batchPlan: BatchPlan = {
             batchNumber: this.batchNumber++,
             operations,
@@ -637,25 +242,9 @@ class BatchScheduler {
             endTime: timings.weaken2End
         };
 
-        // Execute the batch
-        if (this.executeBatchPlan(batchPlan, freeRams)) {
+        if (this.executeBatchPlan(batchPlan, ramManager)) {
             // Update active batch count
             this.activeBatchCount.set(target, currentBatches + 1);
-
-            // Schedule a function to decrease the counter after batch completes
-            setTimeout(() => {
-                const count = this.activeBatchCount.get(target) || 0;
-                if (count > 0) {
-                    this.activeBatchCount.set(target, count - 1);
-                }
-            }, timings.weaken2End.getTime() - Date.now() + 100);
-
-            // Track profit for this server
-            const profit = strategy.hackThreads * this.ns.getServerMaxMoney(target) * hackMoneyRatio * this.ns.hackAnalyze(target);
-            const hackTime = this.ns.getHackTime(target);
-            const profitPerMinute = profit / (hackTime / 60000);
-            profitsMap.set(target, profitPerMinute);
-
             return true;
         }
 
@@ -663,71 +252,58 @@ class BatchScheduler {
     }
 
     /**
-     * Calculate thread counts for a batch
-     * @param {string} target - Target server
-     * @param {number} hackMoneyRatio - Percentage of money to hack
-     * @returns {AttackStrategy} Thread counts for each operation
+     * Verify active batches to maintain accurate counts
+     */
+    verifyActiveBatches(): void {
+        this.activeBatchCount.clear();
+    }
+
+    /**
+     * Calculate the strategy for a batch attack
      */
     calculateBatchStrategy(target: string, hackMoneyRatio: number): AttackStrategy {
-        const server = this.ns.getServer(target);
-        const player = this.ns.getPlayer();
-        const cores = this.ns.getServer('home').cpuCores;
+        const serverValue = calculateServerValue(this.ns, target);
 
-        let hackThreads: number;
-        let growThreads: number;
-        let weakenThreads: number;
-        let weakenForHackThreads: number;
+        // Get server info
+        const maxMoney = this.ns.getServerMaxMoney(target);
+        const growthRate = this.ns.getServerGrowth(target);
+        const minSecurity = this.ns.getServerMinSecurityLevel(target);
 
-        // Limit hack ratio to the configured target percentage
-        const effectiveHackRatio = Math.min(hackMoneyRatio, CONFIG.batch.targetHackPercentage);
+        // Calculate hack threads to steal the desired percentage of money
+        const hackPercent = this.ns.hackAnalyze(target);
+        let hackThreads = Math.floor(hackMoneyRatio / hackPercent);
 
-        if (this.ns.fileExists('Formulas.exe')) {
-            const formulas = this.ns.formulas.hacking;
-
-            // Calculate hack threads using formulas
-            const hackPercent = formulas.hackPercent(server, player);
-            hackThreads = Math.floor(effectiveHackRatio / hackPercent);
-            hackThreads = Math.max(1, hackThreads); // Ensure at least 1 thread
-
-            // Calculate security increase from hack
-            const hackSecurityIncrease = this.ns.hackAnalyzeSecurity(hackThreads);
-            weakenForHackThreads = Math.ceil(hackSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
-
-            // Calculate growth factor after hack
-            const moneyRemaining = (server.moneyMax || 0) * (1 - effectiveHackRatio);
-            const growthRequired = (server.moneyMax || 0) / moneyRemaining;
-
-            // Calculate grow threads using formulas
-            server.moneyAvailable = moneyRemaining; // Temporarily modify for grow calculation
-            growThreads = Math.ceil(formulas.growThreads(server, player, server.moneyMax || 0, cores));
-            server.moneyAvailable = server.moneyMax || 0; // Restore original value
-
-            // Calculate security increase from grow
-            const growSecurityIncrease = this.ns.growthAnalyzeSecurity(growThreads);
-            weakenThreads = Math.ceil(growSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
-        } else {
-            // Fallback calculations without Formulas.exe
-            const hackPercent = this.ns.hackAnalyze(target);
-            hackThreads = Math.floor(effectiveHackRatio / hackPercent);
-            hackThreads = Math.max(1, hackThreads); // Ensure at least 1 thread
-
-            const hackSecurityIncrease = this.ns.hackAnalyzeSecurity(hackThreads);
-            weakenForHackThreads = Math.ceil(hackSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
-
-            const growthRequired = 1 / (1 - effectiveHackRatio);
-            growThreads = Math.ceil(this.ns.growthAnalyze(target, growthRequired));
-
-            const growSecurityIncrease = this.ns.growthAnalyzeSecurity(growThreads);
-            weakenThreads = Math.ceil(growSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
+        // Ensure we don't use too many threads (at most 25% of money)
+        const maxStealPercentage = Math.min(0.25, hackMoneyRatio);
+        if (hackThreads * hackPercent > maxStealPercentage) {
+            hackThreads = Math.floor(maxStealPercentage / hackPercent);
         }
 
-        // Ensure minimum of 1 thread for each operation
-        hackThreads = Math.max(1, hackThreads);
-        growThreads = Math.max(1, growThreads);
-        weakenThreads = Math.max(1, weakenThreads);
-        weakenForHackThreads = Math.max(1, weakenForHackThreads);
+        // Calculate security increase from hack
+        const hackSecurityIncrease = hackThreads * CONFIG.security.hackThreadSecurityIncrease;
 
-        const totalThreads = hackThreads + growThreads + weakenThreads + weakenForHackThreads;
+        // Calculate threads to weaken after hack
+        const weakenForHackThreads = Math.ceil(hackSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
+
+        // Calculate grow threads needed to recover from the hack
+        const growRatio = 1 / (1 - maxStealPercentage);
+        const growThreads = this.ns.fileExists('Formulas.exe')
+            ? Math.ceil(this.ns.formulas.hacking.growThreads(
+                this.ns.getServer(target),
+                this.ns.getPlayer(),
+                maxMoney,
+                1 // cores
+            ))
+            : Math.ceil(this.ns.growthAnalyze(target, growRatio));
+
+        // Calculate security increase from grow
+        const growSecurityIncrease = growThreads * CONFIG.security.growThreadSecurityIncrease;
+
+        // Calculate threads to weaken after grow
+        const weakenThreads = Math.ceil(growSecurityIncrease / CONFIG.security.weakenSecurityDecrease);
+
+        // Calculate total threads and RAM needed
+        const totalThreads = hackThreads + weakenForHackThreads + growThreads + weakenThreads;
         const totalRAM = totalThreads * SCRIPT_RAM.slaveScript;
 
         return {
@@ -737,36 +313,31 @@ class BatchScheduler {
             weakenForHackThreads,
             totalThreads,
             totalRAM,
-            serverValue: (server.moneyMax || 0) * (server.serverGrowth || 0) * this.ns.hackAnalyze(target),
-            maxStealPercentage: effectiveHackRatio
+            serverValue,
+            maxStealPercentage
         };
     }
 
     /**
      * Execute a batch plan by distributing operations across servers
-     * @param {BatchPlan} batchPlan - The batch plan to execute
-     * @param {RamUsage} freeRams - Available RAM information
-     * @returns {boolean} Whether all operations were successfully scheduled
      */
-    executeBatchPlan(batchPlan: BatchPlan, freeRams: RamUsage): boolean {
-        // Sort operations by thread count (descending) to execute largest first
-        const sortedOperations = [...batchPlan.operations].sort((a, b) => b.threads - a.threads);
-
-        for (const operation of sortedOperations) {
-            // Execute the operation
-            const success = this.executeOperation(operation, freeRams);
-
-            if (!success) {
-                // If any operation fails, the batch fails
-                if (CONFIG.batch.debugLogs) {
-                    this.ns.print(`Failed to execute operation ${operation.description} for batch ${batchPlan.batchNumber} targeting ${batchPlan.target}`);
-                }
-                return false;
-            }
+    executeBatchPlan(batchPlan: BatchPlan, ramManager: IRamManager): boolean {
+        // Check if we have enough RAM for all operations
+        let totalRamNeeded = 0;
+        for (const op of batchPlan.operations) {
+            totalRamNeeded += op.threads * SCRIPT_RAM.slaveScript;
         }
 
-        if (CONFIG.batch.debugLogs) {
-            this.ns.print(`Successfully scheduled batch ${batchPlan.batchNumber} for ${batchPlan.target} with ${batchPlan.operations.length} operations`);
+        if (ramManager.getTotalFreeRam() < totalRamNeeded) {
+            return false;
+        }
+
+        // Execute each operation in the batch
+        for (const operation of batchPlan.operations) {
+            const success = this.executeOperation(operation, ramManager);
+            if (!success) {
+                return false;
+            }
         }
 
         return true;
@@ -774,202 +345,233 @@ class BatchScheduler {
 
     /**
      * Execute a single batch operation
-     * @param {BatchOperation} operation - The operation to execute
-     * @param {RamUsage} freeRams - Available RAM
-     * @returns {boolean} Whether the operation was successfully executed
      */
-    executeOperation(operation: BatchOperation, freeRams: RamUsage): boolean {
-        if (operation.threads <= 0) return true;
+    executeOperation(operation: BatchOperation, ramManager: IRamManager): boolean {
+        if (operation.threads <= 0) {
+            return true; // No threads to run
+        }
 
-        // Calculate delay time for script execution
-        const startTime = operation.startTime.getTime();
+        // Calculate sleep time until operation should start
+        const sleepTime = operation.startTime.getTime() - Date.now();
 
-        // Split threads across available servers
-        let remainingThreads = operation.threads;
-        const serverRamsCopy = freeRams.serverRams;
+        // Get servers sorted by free RAM
+        const servers = ramManager.getServersByFreeRam().map(host => ({
+            host,
+            freeRam: ramManager.getFreeRam(host)
+        }));
 
-        // Sort servers by free RAM (descending) to use larger chunks first
-        serverRamsCopy.sort((a, b) => b.freeRam - a.freeRam);
+        // Prepare args for the script
+        const args = [
+            operation.target,
+            operation.startTime.getTime(),
+            0, // Duration (0 = automatic)
+            operation.description,
+            false, // Stock manipulation
+            CONFIG.batch.silentMisfires
+        ];
 
-        for (const serverRamInfo of serverRamsCopy) {
-            if (remainingThreads <= 0) break;
+        // Distribute threads across servers
+        const success = distributeThreads(
+            this.ns,
+            operation.script,
+            operation.threads,
+            servers,
+            ...args
+        );
 
-            const scriptRam = this.ns.getScriptRam(operation.script);
-            const maxThreads = Math.floor(serverRamInfo.freeRam / scriptRam);
+        // If distribution was successful, update the RAM usage in ramManager
+        if (success) {
+            // The distributeThreads function already used the RAM from the servers array
+            // We need to update the ramManager with the new values
+            for (const server of servers) {
+                const originalFreeRam = ramManager.getFreeRam(server.host);
+                const ramUsed = originalFreeRam - server.freeRam;
 
-            if (maxThreads <= 0) continue;
-
-            const threadsToRun = Math.min(maxThreads, remainingThreads);
-
-            // Copy script if needed
-            if (!this.ns.fileExists(operation.script, serverRamInfo.host)) {
-                if (!this.ns.scp(operation.script, serverRamInfo.host, 'home')) {
-                    this.ns.write('/tmp/log.txt', `Failed to copy ${operation.script} to ${serverRamInfo.host}\n`, 'a');
-                    continue;
+                if (ramUsed > 0) {
+                    ramManager.reserveRam(ramUsed, server.host);
                 }
-            }
-
-            // Run script with batch timing parameters
-            const args = [
-                operation.target,
-                startTime,
-                operation.endTime.getTime() - startTime,
-                `${operation.description}-batch${this.batchNumber}`,
-                operation.manipulateStock || false,
-                CONFIG.batch.silentMisfires,
-            ];
-
-            const pid = this.ns.exec(operation.script, serverRamInfo.host, threadsToRun, ...args);
-
-            if (pid > 0) {
-                // Successfully started script
-                remainingThreads -= threadsToRun;
-                // Update RAM usage
-                freeRams.reserveRam(threadsToRun * scriptRam, serverRamInfo.host);
-            } else {
-                const errorMsg = `Failed to execute ${operation.script} on ${serverRamInfo.host} with ${threadsToRun} threads`;
-                this.ns.write('/tmp/log.txt', errorMsg + '\n', 'a');
             }
         }
 
-        return remainingThreads === 0;
+        return success;
+    }
+
+    /**
+     * Get the active batch count for a target
+     */
+    getActiveBatchCount(target: string): number {
+        return this.activeBatchCount.get(target) || 0;
+    }
+
+    /**
+     * Get the size of the active batch count map
+     */
+    getActiveBatchCountMapSize(): number {
+        return this.activeBatchCount.size;
+    }
+
+    /**
+     * Reset active batch counts
+     */
+    resetActiveBatchCounts(): void {
+        this.activeBatchCount.clear();
     }
 }
 
 /**
- * Main function that orchestrates the distributed batch hacking operation
- * @param {NS} ns - The Netscript API
+ * Main script entry point
  */
 export async function main(ns: NS): Promise<void> {
-    ns.ui.openTail();
     ns.disableLog('ALL');
-    ns.clearLog();
+    ns.enableLog('print');
 
-    const startTime = Date.now();
+    try {
+        // Wait for other scripts to initialize
+        await ns.sleep(200);
 
-    // Make sure scripts exist
-    ensureSlaveScriptsExist(ns);
+        // Initialize batch scheduler
+        const batchScheduler = new BatchScheduler(ns);
 
-    // Initialize managers
-    const batchScheduler = new BatchScheduler(ns);
-    const prepManager = new ServerPreparationManager(ns);
+        // Create config for AutoGrowManager
+        const autoGrowConfig: Partial<AutoGrowConfig> = {
+            security: {
+                threshold: CONFIG.batch.prepSecurity,
+                weakenAmount: CONFIG.security.weakenSecurityDecrease
+            },
+            money: {
+                threshold: CONFIG.batch.prepMoneyThreshold
+            },
+            debug: CONFIG.batch.debugLogs
+        };
 
-    // Initialize variables
-    let hackMoneyRatio = adjustInitialHackMoneyRatio(ns);
-    let servers: Set<string> = new Set<string>(['home']); // At least start with home server
-    let targets: string[];
-    let freeRams: RamUsage;
-    let ramUsage = 0;
-    let lastServerCount = 0;
-    let lastFilteredCount = 0;
+        // Create the AutoGrowManager with proper config
+        const prepManager = new AutoGrowManager(ns, autoGrowConfig);
 
-    // Stock market variables
-    const growStocks = new Set<string>();
-    const hackStocks = new Set<string>();
-    const moneyXpShare = true;
-    let shareThreadIndex = 0;
+        // Reset active batch counts at startup
+        batchScheduler.resetActiveBatchCounts();
 
-    // Main loop
-    let tick = 1;
-    const scanAndNukeFreq = 20;
-    const displayFreq = 1;
-    const purchaseServerFreq = 21;
-    const portOpenerFreq = 6; // Check every 5 ticks
+        ns.print(`Distributed Hack started - targeting up to ${CONFIG.maxParallelAttacks} servers`);
 
-    const scriptsToDeploy = [SCRIPT_PATH.hack, SCRIPT_PATH.grow, SCRIPT_PATH.weaken, SCRIPT_PATH.share];
+        let tick = 0;
+        while (true) {
+            try {
+                // Reset server preparation states
+                prepManager.resetServerStates();
 
-    // Main loop with enhanced structure
-    while (tick++) {
-        try {
-            // Scan and nuke network periodically
-            if (tick % scanAndNukeFreq === 0) {
-                servers = scanAndUpdateNetwork(ns, scriptsToDeploy);
-            }
+                // Create a RAM manager for this tick
+                const ramManager = createConfiguredRamManager(ns);
 
-            /* CORE ATTACK LOGIC - Now with batching */
-            freeRams = getFreeRam(ns, servers);
+                // Process one tick of the preparation manager
+                await prepManager.tick(ramManager);
 
-            // Log when servers are filtered
-            const filteredServers = filterServersByRam(ns, servers);
-            if (CONFIG.ram.ignoreServersLowerThanPurchased &&
-                (lastServerCount !== servers.size || lastFilteredCount !== filteredServers.size)) {
-                lastServerCount = servers.size;
-                lastFilteredCount = filteredServers.size;
-            }
+                // Get hackable targets
+                const targets = getHackableServers(ns);
 
-            targets = getHackableServers(ns, Array.from(servers));
-
-            // Launch batch attacks with timeout protection
-            const batchesLaunched = await manageBatchAttacks(
-                ns,
-                batchScheduler,
-                prepManager,
-                freeRams,
-                targets,
-                hackMoneyRatio
-            );
-
-            if (batchesLaunched > 0) {
-                ramUsage = freeRams.utilization;
-                hackMoneyRatio = adjustHackMoneyRatio(ns, ramUsage, hackMoneyRatio);
-            }
-
-            // Handle additional features in a more modular way
-            shareThreadIndex = await runAdditionalFeatures(ns, freeRams, servers, targets, moneyXpShare, hackMoneyRatio, shareThreadIndex);
-
-            // Periodic server purchases
-            if (tick % purchaseServerFreq === 0) {
-                handleServerPurchases(ns);
-            }
-
-            // Check and buy port openers periodically
-            if (tick % portOpenerFreq === 0) {
-                ns.exec('lib/buy_port_opener.js', 'home', 1);
-            }
-
-            // Calculate income per second
-            const incomePerSecond = Array.from(profitsMap.values()).reduce((sum, profit) => sum + profit, 0);
-
-            // Display status periodically
-            if (tick % displayFreq === 0) {
-                displayAllStats(
+                // Execute batch attacks with current RAM and targets
+                const batchesLaunched = await manageBatchAttacks(
                     ns,
-                    startTime,
+                    batchScheduler,
+                    prepManager,
+                    ramManager,
                     targets,
-                    profitsMap,
-                    hackMoneyRatio,
-                    ramUsage,
-                    servers,
-                    batchesLaunched,
-                    freeRams.overallFreeRam,
-                    freeRams.overallMaxRam,
-                    incomePerSecond,
-                    prepManager
+                    CONFIG.batch.targetHackPercentage
                 );
-            }
 
-        } catch (error) {
-            ns.tprint(`ERROR: ${String(error)}`);
+                // Periodically verify batch counters (every 30 ticks)
+                if (tick % 30 === 0) {
+                    batchScheduler.verifyActiveBatches();
+
+                    // Print only every 30 ticks to avoid spam
+                    ns.print(`Status: ${batchesLaunched} batches launched, ${formatRam(ramManager.getTotalFreeRam())} RAM free, ${formatPercent(ramManager.getUtilization())} utilized`);
+                }
+
+                // Wait before next cycle
+                await ns.sleep(CONFIG.timing.cycleSleep);
+                tick++;
+            } catch (innerError) {
+                // Catch and log any errors in the main loop, but keep running
+                ns.print(`ERROR in main loop: ${innerError}`);
+                await ns.sleep(5000); // Sleep a bit longer on error
+            }
         }
-        await ns.sleep(CONFIG.timing.cycleSleep);
+    } catch (error) {
+        // Catch and log any errors that would cause the script to exit
+        ns.tprint(`FATAL ERROR: ${error}`);
     }
+}
+
+/**
+ * Create and configure a RAM manager with the appropriate settings
+ */
+function createConfiguredRamManager(ns: NS): RamManager {
+    const ramManager = new RamManager(ns, false); // Don't update RAM on creation
+
+    // Clear existing data
+    ramManager['servers'].clear();
+
+    const homeReservedRam = Math.max(
+        Math.min(ns.getServerMaxRam('home') * CONFIG.ram.reservedHomeRamPercentage, CONFIG.ram.maxReserveHomeRAM),
+        CONFIG.ram.minReserveHomeRam
+    );
+
+    // Add purchased servers
+    for (const server of ns.getPurchasedServers()) {
+        const maxRam = ns.getServerMaxRam(server);
+        const usedRam = ns.getServerUsedRam(server);
+        const freeRam = maxRam - usedRam;
+
+        if (freeRam > 0) {
+            ramManager['servers'].set(server, {
+                freeRam,
+                maxRam
+            });
+        }
+    }
+
+    // Add home if enabled
+    if (CONFIG.ram.useHomeRam) {
+        const maxRam = ns.getServerMaxRam('home');
+        const usedRam = ns.getServerUsedRam('home');
+        const freeRam = Math.max(0, maxRam - usedRam - homeReservedRam);
+
+        if (freeRam > 0) {
+            ramManager['servers'].set('home', {
+                freeRam,
+                maxRam
+            });
+        }
+    }
+
+    // Add all other servers with at least 2GB RAM
+    const hackableServers = findAllServers(ns).filter(s =>
+        s !== 'home' && !ns.getPurchasedServers().includes(s) && ns.hasRootAccess(s) &&
+        ns.getServerMaxRam(s) >= 2
+    );
+
+    for (const server of hackableServers) {
+        const maxRam = ns.getServerMaxRam(server);
+        const usedRam = ns.getServerUsedRam(server);
+        const freeRam = maxRam - usedRam;
+
+        if (freeRam > 0) {
+            ramManager['servers'].set(server, {
+                freeRam,
+                maxRam
+            });
+        }
+    }
+
+    return ramManager;
 }
 
 /**
  * Main batch hacking logic with server preparation
- * @param {NS} ns - Netscript API
- * @param {BatchScheduler} batchScheduler - Batch scheduler
- * @param {ServerPreparationManager} prepManager - Server preparation manager
- * @param {RamUsage} freeRams - RAM usage information
- * @param {string[]} targets - Array of potential hack targets
- * @param {number} hackMoneyRatio - Current hack money ratio
- * @returns {Promise<number>} Number of batches launched
  */
 async function manageBatchAttacks(
     ns: NS,
     batchScheduler: BatchScheduler,
-    prepManager: ServerPreparationManager,
-    freeRams: RamUsage,
+    prepManager: AutoGrowManager,
+    ramManager: IRamManager,
     targets: string[],
     hackMoneyRatio: number
 ): Promise<number> {
@@ -977,622 +579,92 @@ async function manageBatchAttacks(
     const startTime = Date.now();
     let batchesLaunched = 0;
 
-    // Process targets in order of priority
-    for (const target of targets) {
-        // Check for timeout
-        if (CONFIG.features.useTimedThreadAdjustment && Date.now() - startTime > CONFIG.timing.maxThreadCalculationTime) {
-            ns.tprint(`WARNING: Batch calculation timeout reached after ${CONFIG.timing.maxThreadCalculationTime}ms`);
+    // If no RAM available, exit early
+    if (ramManager.getTotalFreeRam() < SCRIPT_RAM.slaveScript * 10) {
+        return 0;
+    }
+
+    // Limit targets if prioritizing high-value servers
+    let targetsToProcess = [...targets];
+    if (CONFIG.batch.prioritizeHighValue && CONFIG.batch.maxTargetsPerCycle > 0) {
+        // Apply a more aggressive filter for high-value targets
+        targetsToProcess = targetsToProcess
+            .sort((a, b) => {
+                const aScore = calculateServerValue(ns, a);
+                const bScore = calculateServerValue(ns, b);
+                return bScore - aScore;
+            })
+            .slice(0, CONFIG.batch.maxTargetsPerCycle);
+    }
+
+    // Continue scheduling batches until we run out of RAM or targets
+    let iterationCount = 0;
+    const maxIterations = 5; // Safety limit to prevent infinite loops
+
+    while (ramManager.getTotalFreeRam() > SCRIPT_RAM.slaveScript * 10 &&
+        batchesLaunched < CONFIG.maxParallelAttacks &&
+        iterationCount < maxIterations) {
+
+        iterationCount++;
+
+        // Check timeout
+        if (Date.now() - startTime > CONFIG.timing.maxThreadCalculationTime) {
+            ns.print(`Batch calculation timeout reached (${CONFIG.timing.maxThreadCalculationTime}ms)`);
             break;
         }
 
-        // Skip if we've maxed out parallel attacks
-        if (batchesLaunched >= CONFIG.maxParallelAttacks) break;
-
         // If batch mode is disabled, skip
-        if (!CONFIG.batch.enabled) break;
-
-        // First check if the server is prepared
-        const isReady = prepManager.isServerPrepared(target);
-
-        if (!isReady) {
-            // Prepare the server if not ready
-            await prepManager.prepareServer(target, freeRams);
-            continue; // Skip to next target
+        if (!CONFIG.batch.enabled) {
+            break;
         }
 
-        // Server is prepared, attempt to launch a batch
-        if (batchScheduler.scheduleHWGWBatch(target, freeRams, hackMoneyRatio)) {
-            batchesLaunched++;
+        // Process each target
+        for (const target of targetsToProcess) {
+            // Skip if we've maxed out parallel attacks
+            if (batchesLaunched >= CONFIG.maxParallelAttacks) {
+                break;
+            }
+
+            // If we're running out of RAM, break
+            if (ramManager.getTotalFreeRam() < SCRIPT_RAM.slaveScript * 10) {
+                break;
+            }
+
+            // First check if the server is prepared
+            const isReady = prepManager.isServerPrepared(target);
+
+            if (!isReady) {
+                // Process the server for one tick
+                if (iterationCount === 1) { // Only try to prepare on first iteration
+                    await prepManager.processTick(target, ramManager);
+                }
+                continue; // Skip to next target
+            }
+
+            // Check if we have active batches for this target already
+            const activeBatchCount = batchScheduler.getActiveBatchCount(target);
+            const maxBatchesForTarget = CONFIG.batch.maxBatchesPerTarget;
+
+            // If we've already maxed out batches for this target, skip
+            if (activeBatchCount >= maxBatchesForTarget) {
+                continue;
+            }
+
+            // Try to schedule a batch
+            if (batchScheduler.scheduleHWGWBatch(target, ramManager, hackMoneyRatio)) {
+                batchesLaunched++;
+
+                // For more uniform distribution, only schedule one batch per target per iteration
+                continue;
+            }
+        }
+
+        // If we didn't schedule any batches this iteration, break 
+        if (batchesLaunched === 0) {
+            break;
         }
     }
 
     return batchesLaunched;
 }
 
-/**
- * Scan the network, nuke servers, and copy scripts
- * @param {NS} ns - Netscript API
- * @param {string[]} scriptsToDeploy - Scripts to copy to servers
- * @returns {Set<string>} Set of available servers
- */
-function scanAndUpdateNetwork(ns: NS, scriptsToDeploy: string[]): Set<string> {
-    const servers = scanAndNuke(ns);
-    copyScripts(ns, scriptsToDeploy, 'home', Array.from(servers));
-    return servers;
-}
-
-/**
- * Handle server purchases
- * @param {NS} ns - Netscript API
- */
-function handleServerPurchases(ns: NS): void {
-    const { baseReserve, cashToSpend, currentCash } = calculateDynamicReserve(ns);
-    if (cashToSpend > 0) {
-        // upgradeByBudget(ns, CONFIG.serverPurchase.maxPurchasedRam, cashToSpend); 
-        ns.exec('purchase_server.js', 'home', 1, CONFIG.serverPurchase.maxPurchasedRam, cashToSpend);
-    }
-}
-
-/**
- * Adjusts initial hack money ratio based on home server RAM
- * @param {NS} ns - Netscript API
- */
-function adjustInitialHackMoneyRatio(ns: NS, initRatio: number = 0.1): number {
-    const homeRam = ns.getServerMaxRam('home');
-    let hackMoneyRatio = initRatio;
-    if (homeRam >= 65536) { hackMoneyRatio = 0.5; } // Reduced from 0.99 for batch hacking
-    else if (homeRam >= 16384) { hackMoneyRatio = 0.4; } // Reduced from 0.9 for batch hacking
-    else if (homeRam > 8192) { hackMoneyRatio = 0.3; } // Reduced from 0.5 for batch hacking
-    else if (homeRam > 2048) { hackMoneyRatio = 0.2; }
-    return hackMoneyRatio;
-}
-
-/**
- * Attempts to run solve-contracts script if enough RAM is available
- * @param {NS} ns - Netscript API
- */
-function attemptSolveContracts(ns: NS): void {
-    if (!CONFIG.features.solveContracts) return;
-
-    // Check if the script exists
-    if (!ns.fileExists(SCRIPT_PATH.solveContracts, 'home')) return;
-
-    // Check if it's already running
-    if (ns.isRunning(SCRIPT_PATH.solveContracts, 'home')) return;
-
-    // Get home server RAM
-    const homeMaxRam = ns.getServerMaxRam('home');
-    const homeUsedRam = ns.getServerUsedRam('home');
-    const scriptRam = ns.getScriptRam(SCRIPT_PATH.solveContracts, 'home');
-
-    // Only run if enough RAM is available
-    if (homeMaxRam - homeUsedRam >= scriptRam + CONFIG.ram.minReserveHomeRam) {
-        ns.exec(SCRIPT_PATH.solveContracts, 'home', 1);
-    }
-}
-
-/**
- * Share computing power for faction reputation
- * @param {NS} ns - Netscript API
- * @param shareThreadIndex - Current thread index
- * @param freeRams - RAM usage information
- * @returns Updated shareThreadIndex
- */
-function shareComputingPower(ns: NS, shareThreadIndex: number, freeRams: RamUsage): number {
-    const maxRam = ns.getServerMaxRam('home');
-    const usedRam = ns.getServerUsedRam('home');
-    const freeRam = maxRam - usedRam;
-    const shareThreads = Math.floor(freeRam / SCRIPT_RAM.shareScript);
-
-    if (shareThreads > 0) {
-        ns.exec(SCRIPT_PATH.share, 'home', shareThreads, shareThreadIndex);
-        freeRams.reserveRam(shareThreads * SCRIPT_RAM.shareScript, 'home');
-        if (shareThreadIndex > 9) {
-            shareThreadIndex = 0;
-        } else {
-            shareThreadIndex++;
-        }
-    }
-    return shareThreadIndex;
-}
-
-/**
- * Adjusts hack money ratio based on RAM usage and attack success
- * @param {NS} ns - Netscript API
- * @param ramUsage - Current RAM usage ratio
- * @param hackMoneyRatio - Current hack money ratio
- * @returns Adjusted hack money ratio
- */
-function adjustHackMoneyRatio(ns: NS, ramUsage: number, currentRatio: number): number {
-    // If batch mode is disabled, use more aggressive adjustment
-    if (!CONFIG.batch.enabled) {
-        // Already using lots of RAM at high ratio, decrease
-        if (ramUsage > CONFIG.thresholds.ramUsageHigh && currentRatio > CONFIG.thresholds.hackMoneyRatioMin) {
-            const newRatio = Math.max(CONFIG.thresholds.hackMoneyRatioMin, currentRatio * 0.95);
-            return newRatio;
-        }
-        // Low RAM usage, increase ratio to use more capacity
-        if (ramUsage < CONFIG.thresholds.ramUsageLow && currentRatio < CONFIG.thresholds.hackMoneyRatioMax) {
-            const newRatio = Math.min(CONFIG.thresholds.hackMoneyRatioMax, currentRatio * 1.05);
-            return newRatio;
-        }
-        // No adjustment needed
-        return currentRatio;
-    }
-
-    // For batch mode, use more conservative adjustment
-    // Already using lots of RAM at high ratio, decrease
-    if (ramUsage > CONFIG.thresholds.ramUsageHigh && currentRatio > CONFIG.thresholds.hackMoneyRatioMin) {
-        const newRatio = Math.max(CONFIG.thresholds.hackMoneyRatioMin, currentRatio * 0.98);
-        return newRatio;
-    }
-    // Low RAM usage, increase ratio to use more capacity, but be more conservative
-    if (ramUsage < CONFIG.thresholds.ramUsageLow && currentRatio < CONFIG.batch.targetHackPercentage * 2) {
-        const newRatio = Math.min(CONFIG.batch.targetHackPercentage * 2, currentRatio * 1.02);
-        return newRatio;
-    }
-    // No adjustment needed
-    return currentRatio;
-}
-
-/**
- * Run additional features like contract solving, sharing, and XP weakening
- * @param {NS} ns - Netscript API
- * @param {RamUsage} freeRams - RAM usage information
- * @param {Set<string>} servers - Set of servers
- * @param {string[]} targets - Array of potential hack targets
- * @param {boolean} moneyXpShare - Whether to share computing power
- * @param {number} hackMoneyRatio - Current hack money ratio
- * @param {number} shareThreadIndex - Current thread index for sharing
- * @returns {Promise<number>} Updated shareThreadIndex
- */
-async function runAdditionalFeatures(
-    ns: NS,
-    freeRams: RamUsage,
-    servers: Set<string>,
-    targets: string[],
-    moneyXpShare: boolean,
-    hackMoneyRatio: number,
-    shareThreadIndex: number
-): Promise<number> {
-    let updatedShareThreadIndex = shareThreadIndex;
-
-    // Try to solve contracts if we have RAM
-    attemptSolveContracts(ns);
-
-    // Share computing power if configured
-    if (moneyXpShare && hackMoneyRatio >= 0.9) {
-        updatedShareThreadIndex = shareComputingPower(ns, shareThreadIndex, freeRams);
-    }
-
-    // Run XP weaken if we have spare RAM
-    const ramUsage = freeRams.utilization;
-    if (ramUsage < CONFIG.thresholds.ramUsageLow && hackMoneyRatio >= 0.9) {
-        await xpWeakenWithTimeout(ns, freeRams, servers, targets);
-    }
-
-    return updatedShareThreadIndex;
-}
-
-/**
- * Run XP weaken with timeout protection
- * @param {NS} ns - Netscript API
- * @param {RamUsage} freeRams - RAM usage information
- * @param {Set<string>} servers - Set of servers
- * @param {string[]} targets - Array of potential hack targets
- */
-async function xpWeakenWithTimeout(ns: NS, freeRams: RamUsage, servers: Set<string>, targets: string[]): Promise<void> {
-    const startTime = Date.now();
-    const xpWeakSleep = 1;
-
-    // Sort targets by XP gain potential
-    const playerHackingLevel = ns.getHackingLevel();
-    targets.sort((a, b) => {
-        return weakenXPgainCompare(ns, playerHackingLevel, a) - weakenXPgainCompare(ns, playerHackingLevel, b);
-    });
-
-    // Find a good target for XP
-    for (const target of targets) {
-        // Check for timeout
-        if (CONFIG.features.useTimedThreadAdjustment && Date.now() - startTime > CONFIG.timing.maxThreadCalculationTime / 10) {
-            ns.tprint('WARNING: XP weaken calculation timeout reached');
-            break;
-        }
-
-        // Only target servers that don't already have XP attacks running
-        if (!xpAttackOngoing(ns, servers, target, xpWeakSleep)) {
-            // Calculate threads based on available RAM (use only 60% to leave buffer)
-            const weakThreads = Math.floor((freeRams.overallFreeRam / SCRIPT_RAM.slaveScript) * 0.6);
-            const weakenTime = ns.getWeakenTime(target);
-
-            if (weakThreads > 0) {
-                await distributeTaskWithRetry(ns, SCRIPT_PATH.weaken, weakThreads, freeRams, target, xpWeakSleep);
-                return;
-            }
-        }
-    }
-}
-
-/**
- * Distribute a task across servers with retry mechanism
- * @param {NS} ns - Netscript API
- * @param {string} script - Script to run
- * @param {number} threads - Number of threads to run the script with
- * @param {RamUsage} freeRams - RAM usage information
- * @param {string} target - Target server
- * @param {number} sleepTime - Sleep time for the script
- * @param {boolean | string} manipulateStock - Whether to manipulate stock
- * @returns {Promise<boolean>} Whether the task was successfully distributed
- */
-async function distributeTaskWithRetry(
-    ns: NS,
-    script: string,
-    threads: number,
-    freeRams: RamUsage,
-    target: string,
-    sleepTime: number = 0,
-    manipulateStock: boolean | string = false
-): Promise<boolean> {
-    const maxRetries = 3;
-    let retriesLeft = maxRetries;
-
-    while (retriesLeft > 0) {
-        const success = distributeTask(ns, script, threads, freeRams, target, sleepTime, manipulateStock);
-        if (success) return true;
-
-        // If failed, wait a bit and retry with fewer threads
-        retriesLeft--;
-        threads = Math.floor(threads * 0.8); // Try with 80% of threads
-        if (threads < 1) return false;
-
-        await ns.sleep(100);
-    }
-
-    return false;
-}
-
-/**
- * Calculate available RAM across the network with enhanced functionality
- * @param {NS} ns - Netscript API
- * @param servers - Set of servers
- * @returns RAM usage information with utility methods
- */
-function getFreeRam(ns: NS, servers: Set<string>): RamUsage {
-    const freeRams = new RamUsage();
-
-    // Filter servers based on purchased server RAM if feature is enabled
-    const filteredServers = filterServersByRam(ns, servers);
-
-    for (const server of filteredServers) {
-        if (server === 'home' && !CONFIG.ram.useHomeRam) continue;
-        const maxRam = ns.getServerMaxRam(server);
-        const usedRam = ns.getServerUsedRam(server);
-        let freeRam = maxRam - usedRam;
-
-        // Use dynamic RAM reservation for home server based on percentage
-        if (server === 'home') {
-            // Calculate the amount to reserve based on percentage
-            const reserveAmount = Math.min(
-                CONFIG.ram.maxReserveHomeRAM,
-                Math.max(
-                    maxRam * CONFIG.ram.reservedHomeRamPercentage,
-                    CONFIG.ram.minReserveHomeRam
-                )
-            );
-
-            freeRam -= reserveAmount;
-            if (freeRam < 0) freeRam = 0;
-        }
-
-        if (freeRam >= CONFIG.thresholds.minimumServerRam) {
-            freeRams.addServer(server, freeRam, maxRam);
-        }
-    }
-
-    return freeRams;
-}
-
-/**
- * Filter servers based on purchased server RAM
- * Only include servers with RAM >= minimum purchased server RAM
- * @param {NS} ns - Netscript API
- * @param {Set<string>} servers - Set of all available servers
- * @returns {Set<string>} Filtered set of servers
- */
-function filterServersByRam(ns: NS, servers: Set<string>): Set<string> {
-    const purchasedServers = ns.getPurchasedServers();
-    let minPurchasedRam = 4; // 4GB min if no purchased servers
-    if (purchasedServers.length > 0) {
-        minPurchasedRam = purchasedServers.reduce((min, server) => {
-            const ram = ns.getServerMaxRam(server);
-            return Math.min(min, ram);
-        }, Infinity);
-    }
-    const filteredServers = new Set<string>();
-    for (const server of servers) {
-        if (server === 'home' || purchasedServers.includes(server)) {
-            filteredServers.add(server);
-            continue;
-        }
-        const ram = ns.getServerMaxRam(server);
-        if (ram >= minPurchasedRam) {
-            filteredServers.add(server);
-        }
-    }
-    return filteredServers;
-}
-
-/**
- * Get content from a port for stock market manipulation
- * @param {NS} ns - Netscript API
- * @param portNumber - Port number to read from
- * @param content - Current content of the port
- * @returns Updated set of servers for stock manipulation
- */
-function getStockPortContent(ns: NS, portNumber: number, currentSet: Set<string>): Set<string> {
-    const portHandle = ns.getPortHandle(portNumber);
-
-    if (portHandle.peek() !== 'NULL PORT DATA') {
-        try {
-            const data = JSON.parse(portHandle.read() as string);
-            return new Set(data);
-        } catch (error) {
-            ns.tprint(`Error reading from port ${portNumber}: ${String(error)}`);
-        }
-    }
-    return currentSet;
-}
-
-/**
- * Checks for the presence of required slave scripts, throws error if any are missing
- * @param {NS} ns - Netscript API
- */
-function ensureSlaveScriptsExist(ns: NS): void {
-    const requiredScripts = [
-        SCRIPT_PATH.hack,
-        SCRIPT_PATH.grow,
-        SCRIPT_PATH.weaken,
-        SCRIPT_PATH.share,
-        SCRIPT_PATH.solveContracts
-    ];
-
-    const missingScripts = requiredScripts.filter(path => !ns.fileExists(path));
-    if (missingScripts.length > 0) {
-        ns.tprint(`Required script files missing: ${missingScripts.join(', ')}. Exiting.`);
-        ns.exit();
-    }
-}
-
-/**
- * Calculates a dynamic cash reserve based on owned server values
- * @param {NS} ns - Netscript API
- * @returns {Object} Information about the calculated reserve and available spending
- */
-function calculateDynamicReserve(ns: NS): { baseReserve: number, cashToSpend: number, currentCash: number } {
-    // Calculate the total cost of all owned servers
-    const ownedServers = ns.getPurchasedServers();
-    let totalServerValue = 0;
-
-    // Calculate the total value of all owned servers
-    for (const server of ownedServers) {
-        const serverRam = ns.getServerMaxRam(server);
-        totalServerValue += ns.getPurchasedServerCost(serverRam);
-    }
-
-    // Calculate reserve as a ratio of the total server cost
-    // As server value grows, reserve grows proportionally
-    const baseReserve = Math.max(
-        CONFIG.serverPurchase.minCashReserve,
-        totalServerValue * CONFIG.serverPurchase.cashRatio
-    );
-
-    // Calculate available cash after maintaining reserve
-    const currentCash = ns.getPlayer().money;
-    const cashToSpend = Math.max(0, currentCash - baseReserve);
-
-    return { baseReserve, cashToSpend, currentCash };
-}
-
-/**
- * Compare targets for XP gain potential
- * @param {NS} ns - Netscript API
- * @param playerHackingLevel - Current player hacking level
- * @param target - Target server
- * @returns Relative XP gain value
- */
-function weakenXPgainCompare(ns: NS, playerHackingLevel: number, target: string): number {
-    // Calculate XP factor
-    const xpPerWeaken = (playerHackingLevel - ns.getServerRequiredHackingLevel(target)) / playerHackingLevel;
-    // XP per time unit
-    const xpPerTime = xpPerWeaken / ns.getWeakenTime(target);
-    return xpPerTime;
-}
-
-/**
- * Check if there's already an XP attack ongoing against a target
- * @param {NS} ns - Netscript API
- * @param servers - Set of servers
- * @param target - Target server
- * @param weakSleep - Sleep time for XP weaken threads
- * @returns Whether an XP attack is ongoing
- */
-function xpAttackOngoing(ns: NS, servers: Set<string>, target: string, weakSleep: number): boolean {
-    for (const server of servers) {
-        if (ns.isRunning(SCRIPT_PATH.weaken, server, target, weakSleep)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * Get a list of hackable servers sorted by profitability with improved metrics
- * @param {NS} ns - Netscript API
- * @param servers - Array of servers
- * @returns Array of hackable servers sorted by priority
- */
-function getHackableServers(ns: NS, allServers: string[]): string[] {
-    // Get all servers that can be hacked, sorted by profitability
-    const playerHackLevel = ns.getHackingLevel();
-    const targets = allServers.filter(server => {
-        const maxMoney = ns.getServerMaxMoney(server);
-        const requiredHackLevel = ns.getServerRequiredHackingLevel(server);
-        return maxMoney > 0 && requiredHackLevel <= playerHackLevel;
-    });
-    return targets.sort((a, b) => calculateServerScore(ns, b) - calculateServerScore(ns, a));
-}
-
-function displayAllStats(
-    ns: NS,
-    startTime: number,
-    targets: string[],
-    profitsMap: Map<string, number>,
-    hackMoneyRatio: number,
-    ramUsage: number,
-    servers: Set<string>,
-    batchesLaunched: number,
-    homeFree: number,
-    homeRam: number,
-    incomePerSecond: number,
-    prepManager: ServerPreparationManager
-): void {
-    // Get purchased server info for display
-    const purchasedServers = ns.getPurchasedServers();
-    const filteredServers = filterServersByRam(ns, servers);
-    const filteredCount = filteredServers.size;
-    const totalCount = servers.size;
-    const filteredInfo = CONFIG.ram.ignoreServersLowerThanPurchased && purchasedServers.length > 0
-        ? `${filteredCount}/${totalCount}`
-        : `${totalCount}`;
-
-    // Count servers by prep state
-    let readyCount = 0;
-    let weakCount = 0;
-    let growCount = 0;
-    let noneCount = 0;
-
-    for (const target of targets) {
-        const state = prepManager.getPreparationState(target);
-        if (state === 'ready') readyCount++;
-        else if (state === 'weakening') weakCount++;
-        else if (state === 'growing') growCount++;
-        else noneCount++;
-    }
-
-    const batchModeStatus = CONFIG.batch.enabled ? 'ENABLED' : 'DISABLED';
-
-    const displayLines = [
-        '=== BATCH HACKING STATUS ===',
-        `Batch Mode: ${batchModeStatus}`,
-        `Hack Ratio: ${hackMoneyRatio.toFixed(2)}`,
-        `RAM Usage: ${Math.round(ramUsage * 100)}%`,
-        `Targets: ${targets.length} (Ready: ${readyCount}, Weak: ${weakCount}, Grow: ${growCount}, None: ${noneCount})`,
-        `Servers: ${filteredInfo}${purchasedServers.length > 0 ? ` (${purchasedServers.length} purchased)` : ''}`,
-        `Batches: ${batchesLaunched}`,
-        `Home RAM: ${formatRam(homeFree)}/${formatRam(homeRam)}`,
-        `Hacking Level: ${ns.getHackingLevel()}`,
-        '',
-        '=== PERFORMANCE ===',
-        `Runtime: ${formatTime((Date.now() - startTime) / 1000)}`,
-        `Income/sec: ${formatMoney(incomePerSecond)}`,
-        '',
-        '=== TOP TARGETS ===',
-        'Server | Money | Security | State | Profit'
-    ];
-
-    // Add top 5 targets
-    const topTargets = targets.slice(0, 5);
-    for (const target of topTargets) {
-        try {
-            const money = ns.getServerMoneyAvailable(target);
-            const maxMoney = ns.getServerMaxMoney(target);
-            const security = ns.getServerSecurityLevel(target);
-            const minSecurity = ns.getServerMinSecurityLevel(target);
-            const state = prepManager.getPreparationState(target);
-            const profit = profitsMap.get(target) || 0;
-
-            const moneyPercent = money / maxMoney * 100;
-            const moneyText = `${formatMoney(money)}/${formatMoney(maxMoney)}`;
-            const securityText = `${security.toFixed(1)}/${minSecurity.toFixed(1)}`;
-            const stateText = state.charAt(0).toUpperCase() + state.slice(1);
-            const profitText = formatMoney(profit);
-
-            displayLines.push(`${target} | ${moneyText} (${moneyPercent.toFixed(1)}%) | ${securityText} | ${stateText} | ${profitText}`);
-        } catch (error) {
-            displayLines.push(`${target} | Error: ${error} | Retrieving data`);
-        }
-    }
-    prettyDisplay(ns, displayLines);
-}
-
-/**
- * Distribute a task across servers
- * @param {NS} ns - Netscript API
- * @param {string} script - Script to run
- * @param {number} threads - Number of threads
- * @param {RamUsage} freeRams - RAM usage information
- * @param {string} target - Target server
- * @param {number} sleepTime - Sleep time (ms)
- * @param {boolean|string} manipulateStock - Whether to manipulate stock
- * @returns {boolean} Whether the task was distributed successfully
- */
-function distributeTask(ns: NS, script: string, threads: number, freeRams: RamUsage,
-    target: string, sleepTime: number = 0, manipulateStock: boolean | string = false): boolean {
-    if (threads <= 0) return true;
-
-    const scriptRam = ns.getScriptRam(script);
-    const totalRamNeeded = scriptRam * threads;
-
-    // Check if we have enough total RAM
-    if (freeRams.overallFreeRam < totalRamNeeded) { return false; }
-
-    // Copy the serverRams array to avoid modifying during iteration
-    const serverRamsCopy = freeRams.serverRams;
-
-    // Distribute threads among servers
-    let remainingThreads = threads;
-    const serversUsed: string[] = [];
-
-    // Sort servers by free RAM (descending) to use larger chunks first
-    serverRamsCopy.sort((a, b) => b.freeRam - a.freeRam);
-
-    for (const serverRamInfo of serverRamsCopy) {
-        if (remainingThreads <= 0) break;
-        const maxThreads = Math.floor(serverRamInfo.freeRam / scriptRam);
-        if (maxThreads <= 0) continue;
-        const threadsToRun = Math.min(maxThreads, remainingThreads);
-        if (!ns.fileExists(script, serverRamInfo.host)) {
-            if (!ns.scp(script, serverRamInfo.host, 'home')) {
-                const errorMsg = `Failed to copy ${script} to ${serverRamInfo.host}`;
-                ns.write('/tmp/log.txt', errorMsg + '\n', 'a');
-                continue;
-            }
-        }
-
-        // Run the script with arguments matching the original JS design
-        let pid;
-        if (manipulateStock) {
-            pid = ns.exec(script, serverRamInfo.host, threadsToRun, target, sleepTime, manipulateStock);
-        } else {
-            pid = ns.exec(script, serverRamInfo.host, threadsToRun, target, sleepTime);
-        }
-
-        if (pid > 0) {
-            // Successfully started script
-            remainingThreads -= threadsToRun;
-            serversUsed.push(serverRamInfo.host);
-            // Update the original server in freeRams
-            freeRams.reserveRam(threadsToRun * scriptRam, serverRamInfo.host);
-        } else {
-            const errorMsg = `Failed to execute ${script} on ${serverRamInfo.host} with ${threadsToRun} threads`;
-            ns.write('/tmp/log.txt', errorMsg + '\n', 'a');
-        }
-    }
-
-    // Only log distribution across multiple servers to the error log to keep main log clean
-    if (serversUsed.length > 1) {
-        ns.write('/tmp/log.txt', `Distributed ${script} for ${target} across ${serversUsed.length} servers\n`, 'a');
-    }
-
-    return remainingThreads === 0;
-}
