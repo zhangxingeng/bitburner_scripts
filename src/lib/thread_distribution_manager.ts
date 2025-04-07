@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { IRamManager } from './auto_grow';
+import { RamManager } from './ram_manager';
 import { distributeThreads } from '../utils';
 
 /**
@@ -110,12 +110,7 @@ export class ThreadDistributionManager {
         scripts: HackingScripts
     ) {
         this.ns = ns;
-        this.config = {
-            operationDelay: 50,
-            silentMisfires: true,
-            debug: false,
-            ...config
-        };
+        this.config = config;
         this.scripts = scripts;
     }
 
@@ -125,7 +120,7 @@ export class ThreadDistributionManager {
      * @param ramManager - RAM manager to use for distribution
      * @returns Number of operations executed this tick
      */
-    tick(ramManager: IRamManager): number {
+    tick(ramManager: RamManager): number {
         // Clear expired operations
         this.clearCompletedOperations();
 
@@ -369,7 +364,7 @@ export class ThreadDistributionManager {
      * @param ramManager - RAM manager to use
      * @returns Result of the operation
      */
-    private executeOperation(operation: ScheduledOperation, ramManager: IRamManager): OperationResult {
+    private executeOperation(operation: ScheduledOperation, ramManager: RamManager): OperationResult {
         // Skip if invalid threads
         if (operation.threads <= 0) {
             return {

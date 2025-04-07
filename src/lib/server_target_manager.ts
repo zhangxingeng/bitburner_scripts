@@ -1,307 +1,130 @@
 import { NS } from '@ns';
-import {
-    findAllServers,
-    getHackableServers,
-    calculateServerValue
-} from '../utils';
-import { AutoGrowManager } from './auto_grow';
+import { findAllServers, calculateServerValue } from '../utils';
+import { FormulaHelper } from './formulas';
 
 /**
- * Configuration for the ServerTargetManager
- */
-export interface TargetManagerConfig {
-    /** Maximum number of targets to process per cycle */
-    maxTargetsPerCycle: number;
-    /** Whether to prioritize high-value servers */
-    prioritizeHighValue: boolean;
-    /** Minimum required hacking level for targeting a server */
-    minHackingLevelOffset?: number;
-    /** Debug logging */
-    debug: boolean;
-}
-
-/**
- * Target server information with metadata
- */
-export interface TargetServerInfo {
-    /** Server hostname */
-    hostname: string;
-    /** Server max money */
-    maxMoney: number;
-    /** Server growth rate */
-    growthRate: number;
-    /** Server minimum security level */
-    minSecurityLevel: number;
-    /** Required hacking level */
-    requiredHackingLevel: number;
-    /** Calculated server value/score */
-    value: number;
-    /** Whether the server is prepared for hacking */
-    isPrepared: boolean;
-}
-
-/**
- * Manages server targets for hacking in a tick-based manner
- * 
- * This class is responsible for:
- * - Finding all viable server targets
- * - Evaluating and scoring servers based on various metrics
- * - Filtering and prioritizing targets
- * - Tracking server preparation state
+ * Manages server targets for batch hacking
  */
 export class ServerTargetManager {
     private ns: NS;
-    private config: TargetManagerConfig;
-    private prepManager?: AutoGrowManager;
-    private serverInfoCache: Map<string, TargetServerInfo> = new Map();
-    private lastFullScan: number = 0;
-    private scanInterval: number = 30000; // 30 seconds
+    private formulas: FormulaHelper;
+    private targetServers: string[] = [];
+    private targetValues: Map<string, number> = new Map();
+    private preparedServers: Set<string> = new Set();
 
     /**
-     * Creates a new instance of the ServerTargetManager
-     * 
-     * @param ns - NetScript API
-     * @param config - Configuration options
-     * @param prepManager - Optional AutoGrowManager for server preparation status
+     * Create a new server target manager
+     * @param ns NetScript API
      */
-    constructor(
-        ns: NS,
-        config: TargetManagerConfig,
-        prepManager?: AutoGrowManager
-    ) {
+    constructor(ns: NS) {
         this.ns = ns;
-        this.config = {
-            maxTargetsPerCycle: 8,
-            prioritizeHighValue: true,
-            debug: false,
-            ...config
-        };
-        this.prepManager = prepManager;
+        this.formulas = new FormulaHelper(ns);
+        this.refreshTargets();
     }
 
     /**
-     * Process a single tick, refreshing target data as needed
+     * Refresh the list of potential targets
      */
-    tick(): void {
-        // Periodically refresh server data
-        if (Date.now() - this.lastFullScan > this.scanInterval) {
-            this.refreshServerData();
+    refreshTargets(): void {
+        const allServers = findAllServers(this.ns);
+        const hackLevel = this.ns.getHackingLevel();
+
+        // Filter servers to those that can be hacked
+        this.targetServers = allServers.filter(server => {
+            // Skip purchased servers and home
+            if (server === 'home' || this.ns.getPurchasedServers().includes(server)) {
+                return false;
+            }
+
+            // Only include rooted servers with money
+            if (!this.ns.hasRootAccess(server) || this.ns.getServerMaxMoney(server) <= 0) {
+                return false;
+            }
+
+            // Only include servers we can hack
+            const requiredLevel = this.ns.getServerRequiredHackingLevel(server);
+            return requiredLevel <= hackLevel;
+        });
+
+        // Calculate values for all targets
+        for (const target of this.targetServers) {
+            this.targetValues.set(target, calculateServerValue(this.ns, target));
         }
+
+        // Sort by value (descending)
+        this.targetServers.sort((a, b) => {
+            return (this.targetValues.get(b) || 0) - (this.targetValues.get(a) || 0);
+        });
+
+        // Check which servers are prepared
+        this.updatePreparedStatus();
     }
 
     /**
-     * Refresh all server data
+     * Update which servers are prepared (min security, max money)
      */
-    refreshServerData(): void {
-        // Get all hackable servers
-        const hackableServers = getHackableServers(this.ns);
+    updatePreparedStatus(): void {
+        this.preparedServers.clear();
 
-        // Update server info for each target
-        for (const hostname of hackableServers) {
-            this.updateServerInfo(hostname);
-        }
-
-        // Clean up any servers that no longer exist
-        for (const hostname of this.serverInfoCache.keys()) {
-            if (!hackableServers.includes(hostname)) {
-                this.serverInfoCache.delete(hostname);
+        for (const target of this.targetServers) {
+            if (this.isServerPrepared(target)) {
+                this.preparedServers.add(target);
             }
         }
-
-        this.lastFullScan = Date.now();
-
-        if (this.config.debug) {
-            this.ns.print(`ServerTargetManager: Refreshed data for ${hackableServers.length} servers`);
-        }
     }
 
     /**
-     * Update info for a specific server
+     * Check if a server is prepared (min security, max money)
+     * @param target Server hostname
+     * @returns True if prepared
      */
-    private updateServerInfo(hostname: string): void {
-        if (!this.ns.serverExists(hostname)) return;
+    isServerPrepared(target: string): boolean {
+        const moneyThreshold = 0.9; // 90% of max money
+        const securityThreshold = 3; // Within 3 of min security
 
-        const maxMoney = this.ns.getServerMaxMoney(hostname);
-        const growthRate = this.ns.getServerGrowth(hostname);
-        const minSecurityLevel = this.ns.getServerMinSecurityLevel(hostname);
-        const requiredHackingLevel = this.ns.getServerRequiredHackingLevel(hostname);
-        const value = calculateServerValue(this.ns, hostname);
+        const server = this.ns.getServer(target);
+        const currentMoney = server.moneyAvailable || 0;
+        const maxMoney = server.moneyMax || 1;
+        const currentSecurity = server.hackDifficulty || 100;
+        const minSecurity = server.minDifficulty || 1;
 
-        // Check if server is prepared if we have a prep manager
-        const isPrepared = this.prepManager
-            ? this.prepManager.isServerPrepared(hostname)
-            : this.checkServerPreparation(hostname);
-
-        const serverInfo: TargetServerInfo = {
-            hostname,
-            maxMoney,
-            growthRate,
-            minSecurityLevel,
-            requiredHackingLevel,
-            value,
-            isPrepared
-        };
-
-        this.serverInfoCache.set(hostname, serverInfo);
+        return (
+            currentMoney >= maxMoney * moneyThreshold &&
+            currentSecurity <= minSecurity + securityThreshold
+        );
     }
 
     /**
-     * Basic check if a server is prepared (if no prepManager is available)
-     */
-    private checkServerPreparation(hostname: string): boolean {
-        const securityThreshold = 5; // Default threshold
-        const moneyThreshold = 0.7; // Default threshold (70% of max money)
-
-        const currentSecurity = this.ns.getServerSecurityLevel(hostname);
-        const minSecurity = this.ns.getServerMinSecurityLevel(hostname);
-        const currentMoney = this.ns.getServerMoneyAvailable(hostname);
-        const maxMoney = this.ns.getServerMaxMoney(hostname);
-
-        const securityReady = currentSecurity <= minSecurity + securityThreshold;
-        const moneyReady = currentMoney >= maxMoney * moneyThreshold;
-
-        return securityReady && moneyReady;
-    }
-
-    /**
-     * Get prepared targets sorted by priority
-     * 
-     * @param limit - Maximum number of targets to return
+     * Get the best targets for batch hacking
+     * @param count Maximum number of targets to return
+     * @param preparedOnly Whether to only include prepared targets
      * @returns Array of target hostnames
      */
-    getPreparedTargets(limit?: number): string[] {
-        // Start with all servers from the cache
-        const targets = Array.from(this.serverInfoCache.values())
-            .filter(info => info.isPrepared)
-            .sort((a, b) => {
-                if (this.config.prioritizeHighValue) {
-                    // Sort by value (descending)
-                    return b.value - a.value;
-                } else {
-                    // Sort by required hacking level (ascending)
-                    return a.requiredHackingLevel - b.requiredHackingLevel;
-                }
-            })
-            .map(info => info.hostname);
+    getBestTargets(count: number = 1, preparedOnly: boolean = true): string[] {
+        // Update prepared status
+        this.updatePreparedStatus();
 
-        // Apply limit if provided
-        return limit ? targets.slice(0, limit) : targets;
-    }
+        let candidates: string[];
 
-    /**
-     * Get unprepared targets sorted by priority
-     * 
-     * @param limit - Maximum number of targets to return
-     * @returns Array of target hostnames
-     */
-    getUnpreparedTargets(limit?: number): string[] {
-        // Get all servers that need preparation
-        const targets = Array.from(this.serverInfoCache.values())
-            .filter(info => !info.isPrepared)
-            .sort((a, b) => {
-                if (this.config.prioritizeHighValue) {
-                    // Sort by value (descending)
-                    return b.value - a.value;
-                } else {
-                    // Sort by required hacking level (ascending)
-                    return a.requiredHackingLevel - b.requiredHackingLevel;
-                }
-            })
-            .map(info => info.hostname);
-
-        // Apply limit if provided
-        return limit ? targets.slice(0, limit) : targets;
-    }
-
-    /**
-     * Get all targets sorted by priority (prepared first, then unprepared)
-     * 
-     * @param limit - Maximum number of targets to return
-     * @returns Array of target hostnames
-     */
-    getAllTargets(limit?: number): string[] {
-        const prepared = this.getPreparedTargets();
-        const unprepared = this.getUnpreparedTargets();
-
-        // Combine prepared and unprepared targets
-        const allTargets = [...prepared, ...unprepared];
-
-        // Apply limit if provided
-        return limit ? allTargets.slice(0, limit) : allTargets;
-    }
-
-    /**
-     * Get targets for the current cycle
-     * This is the main method to use each tick to get targets
-     * 
-     * @param preparedOnly - Whether to only include prepared targets
-     * @returns Array of target hostnames
-     */
-    getTargetsForCycle(preparedOnly: boolean = false): string[] {
+        // Filter to prepared servers if requested
         if (preparedOnly) {
-            return this.getPreparedTargets(this.config.maxTargetsPerCycle);
+            candidates = this.targetServers.filter(server => this.preparedServers.has(server));
         } else {
-            return this.getAllTargets(this.config.maxTargetsPerCycle);
+            candidates = this.targetServers;
         }
+
+        // Return the top N candidates
+        return candidates.slice(0, count);
     }
 
     /**
-     * Check if a server is prepared
-     * 
-     * @param hostname - Server hostname
-     * @returns Whether the server is prepared
+     * Check if a target has 100% hack chance
+     * @param target Server hostname
+     * @returns True if hack chance is 100%
      */
-    isServerPrepared(hostname: string): boolean {
-        // First check cache
-        const cachedInfo = this.serverInfoCache.get(hostname);
-        if (cachedInfo) {
-            return cachedInfo.isPrepared;
-        }
-
-        // If not in cache, update and check
-        this.updateServerInfo(hostname);
-        return this.serverInfoCache.get(hostname)?.isPrepared || false;
-    }
-
-    /**
-     * Get detailed info for a server
-     * 
-     * @param hostname - Server hostname
-     * @returns Server info or undefined if not found
-     */
-    getServerInfo(hostname: string): TargetServerInfo | undefined {
-        // Ensure data is up to date
-        if (!this.serverInfoCache.has(hostname)) {
-            this.updateServerInfo(hostname);
-        }
-
-        return this.serverInfoCache.get(hostname);
-    }
-
-    /**
-     * Print status of all targets
-     */
-    printStatus(): void {
-        const prepared = this.getPreparedTargets();
-        const unprepared = this.getUnpreparedTargets();
-
-        this.ns.tprint('===== SERVER TARGETS STATUS =====');
-        this.ns.tprint(`Total targets: ${this.serverInfoCache.size} (${prepared.length} prepared, ${unprepared.length} unprepared)`);
-
-        if (prepared.length > 0) {
-            this.ns.tprint('\nTop 5 prepared targets:');
-            for (let i = 0; i < Math.min(5, prepared.length); i++) {
-                const info = this.serverInfoCache.get(prepared[i])!;
-                this.ns.tprint(`  ${info.hostname}: $${this.ns.formatNumber(info.maxMoney)} (value: ${info.value.toFixed(2)})`);
-            }
-        }
-
-        if (unprepared.length > 0) {
-            this.ns.tprint('\nTop 5 unprepared targets:');
-            for (let i = 0; i < Math.min(5, unprepared.length); i++) {
-                const info = this.serverInfoCache.get(unprepared[i])!;
-                this.ns.tprint(`  ${info.hostname}: $${this.ns.formatNumber(info.maxMoney)} (value: ${info.value.toFixed(2)})`);
-            }
-        }
+    hasMaxHackChance(target: string): boolean {
+        const server = this.formulas.getOptimalServer(target);
+        const player = this.ns.getPlayer();
+        return this.formulas.getHackChance(server, player) >= 1.0;
     }
 }
