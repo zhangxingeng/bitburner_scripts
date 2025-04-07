@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllPaths, traverse } from './utils';
+import { findAllPaths, traverse } from './lib/utils';
 
 export async function main(ns: NS): Promise<void> {
     const deleteAll = ns.args[0] === 'all';

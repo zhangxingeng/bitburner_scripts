@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatMoney } from './utils';
+import { formatMoney } from './lib/utils';
 
 // =============================================
 // INTERFACES & TYPES

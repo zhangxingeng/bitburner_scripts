@@ -1,11 +1,11 @@
 import { NS } from '@ns';
-import { HackingConfig } from './lib/hack_config';
-import { RamManager } from './lib/ram_manager';
-import { ServerTargetManager } from './lib/server_target_manager';
-import { AutoGrowManager } from './lib/auto_grow';
-import { BatchHackManager } from './lib/batch_hack_manager';
-import { ThreadDistributionManager } from './lib/thread_distribution_manager';
-import { scanAndNuke } from './utils';
+import { HackingConfig } from './hack_lib/hack_config';
+import { RamManager } from './hack_lib/ram_manager';
+import { ServerTargetManager } from './hack_lib/server_target_manager';
+import { AutoGrowManager } from './hack_lib/auto_grow';
+import { BatchHackManager } from './hack_lib/batch_hack_manager';
+import { ThreadDistributionManager } from './hack_lib/thread_distribution_manager';
+import { scanAndNuke } from './lib/utils';
 
 /**
  * High-income batch hacking script

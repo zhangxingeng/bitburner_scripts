@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers } from '../utils';
+import { findAllServers } from '../lib/utils';
 import { HackingConfig } from './hack_config';
 
 /**

@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { getPaths, traverse } from './utils';
+import { getPaths, traverse } from './lib/utils';
 
 
 /** @param {NS} ns */

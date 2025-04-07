@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatMoney, formatTime, isSingleInstance } from './utils';
+import { formatMoney, formatTime, isSingleInstance } from './lib/utils';
 
 // Constants
 const MAX_PAYOFF_TIME = 3600; // 1 hour in seconds

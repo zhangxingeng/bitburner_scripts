@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers } from './utils';
+import { findAllServers } from './lib/utils';
 const cheatyWindow = eval('window') as Window & typeof globalThis;
 const cheatyDocument = eval('document') as Document & typeof globalThis;
 

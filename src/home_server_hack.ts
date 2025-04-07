@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers, gainRootAccess } from './utils';
+import { findAllServers, gainRootAccess } from './lib/utils';
 
 /**
  * Finds the best server to hack based on money and security

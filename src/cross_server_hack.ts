@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers, formatMoney, formatTime, scanAndNuke } from './utils';
+import { findAllServers, formatMoney, formatTime, scanAndNuke } from './lib/utils';
 
 /**
  * Main function for a simple hacking script that targets the most profitable server

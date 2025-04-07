@@ -1,6 +1,6 @@
 import { NS } from '@ns';
 import { RamManager } from './ram_manager';
-import { distributeThreads } from '../utils';
+import { distributeThreads } from '../lib/utils';
 
 /**
  * Configuration for the ThreadDistributionManager

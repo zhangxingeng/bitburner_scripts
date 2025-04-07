@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { shortNumber, formatTime } from '../utils';
+import { shortNumber, formatTime } from '../lib/utils';
 
 /** Available work types for faction work */
 type FactionWorkType = 'hacking' | 'field' | 'security';

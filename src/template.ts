@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers } from './utils';
+import { findAllServers } from './lib/utils';
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
     ns.ui.openTail();
