@@ -29,7 +29,7 @@ interface CurrentWork {
  */
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
-    ns.tail();
+    ns.ui.openTail();
 
     let tickCounter = 0;
 

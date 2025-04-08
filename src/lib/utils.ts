@@ -545,7 +545,7 @@ export function distributeThreads(
     script: string,
     threads: number,
     servers: { host: string, freeRam: number }[],
-    ...args: any[]
+    ...args: any[] // eslint-disable-line @typescript-eslint/no-explicit-any
 ): boolean {
     if (threads <= 0) return true;
 
