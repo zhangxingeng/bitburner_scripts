@@ -13,8 +13,10 @@ export async function main(ns: NS): Promise<void> {
         while (true) {
             const budget = ns.getServerMoneyAvailable('home') * 0.9;
             if (isAllMaxed(ns, 1048576)) { break; }
-            if (budget > avgPrice(ns)) {
-                const success = upgradeByBudget(ns, 1048576, budget);
+
+            const upgradeResult = findOptimalUpgrade(ns, 1048576, 8, budget);
+            if (upgradeResult.shouldUpgrade) {
+                const success = upgradeServer(ns, upgradeResult.server, upgradeResult.currentRam, upgradeResult.targetRam);
                 await ns.sleep(success ? 10 : 10000); // real wait if failed else basic wait
             } else {
                 await ns.sleep(10000);
@@ -52,11 +54,35 @@ function avgPrice(ns: NS): number {
 }
 
 /**
+ * Gets the RAM power (log base 2) of a given RAM amount
+ * @param {number} ram - RAM amount
+ * @returns {number} Power of 2 as integer
+ */
+function getRamPower(ram: number): number {
+    return Math.floor(Math.log2(ram));
+}
+
+/**
+ * Calculates the required power difference threshold based on current RAM
+ * @param {number} currentRam - Current RAM of the server
+ * @returns {number} Required power difference
+ */
+function getRequiredPowerDifference(currentRam: number): number {
+    const currentPower = getRamPower(currentRam);
+
+    if (currentPower >= 20) return 0; // Max reached
+    if (currentPower >= 19) return 1; // At 2^19, even x2 is acceptable
+    if (currentPower >= 18) return 2; // At 2^18, x4 is acceptable
+    return 3; // Otherwise require x8
+}
+
+/**
  * Gets the lowest RAM server or determines if we need to buy a new one
  * @param {NS} ns - Netscript API
+ * @param {number} minInitialRam - Minimum RAM for new servers
  * @returns {Object} Object containing the lowest RAM server info or new server info
  */
-function planNextTarget(ns: NS): { targetServer: string, currentRam: number, isNew: boolean } {
+function planNextTarget(ns: NS, minInitialRam: number = 8): { targetServer: string, currentRam: number, isNew: boolean } {
     const own_servers = ns.getPurchasedServers();
     const max_server_count = ns.getPurchasedServerLimit();
 
@@ -89,45 +115,51 @@ function planNextTarget(ns: NS): { targetServer: string, currentRam: number, isN
 }
 
 /**
- * Given a server, a min ram, a max ram, and a budget, return the ram and cost to upgrade the server to as high as possible
- * @param ns - Netscript API
- * @param server - Server to upgrade
- * @param currentRam - Current RAM of the server (0 if new server)
- * @param minRam - Minimum RAM to upgrade to
- * @param maxRam - Maximum RAM to upgrade to
- * @param budget - Budget to spend
- * @returns {Object} Object containing the ram and cost to upgrade the server. Returns {ram: current_ram, cost: 0} if not enough money to upgrade.
+ * Finds the optimal RAM to upgrade to based on power difference threshold
+ * @param {NS} ns - Netscript API
+ * @param {number} maxRam - Maximum RAM allowed
+ * @param {number} minInitialRam - Minimum RAM for new servers
+ * @param {number} budget - Available budget
+ * @returns {Object} Upgrade details including whether we should upgrade
  */
-function estimateCost(
-    ns: NS,
+function findOptimalUpgrade(ns: NS, maxRam: number, minInitialRam: number, budget: number): {
+    shouldUpgrade: boolean,
+    server: string,
     currentRam: number,
-    minRam: number,
-    maxRam: number,
-    budget: number
-): { ram: number, cost: number } {
-    const nextRam = Math.max(minRam, currentRam > 0 ? currentRam * 2 : minRam);
+    targetRam: number
+} {
+    const { targetServer, currentRam, isNew } = planNextTarget(ns, minInitialRam);
 
-    // If we can't even afford the next tier, return current RAM and cost 0
-    if (nextRam > maxRam || getCostByRam(ns, nextRam) > budget) {
-        return { ram: currentRam, cost: 0 };
+    // If it's a new server, start with the minimum initial RAM
+    const effectiveCurrentRam = isNew ? minInitialRam : currentRam;
+
+    // Determine the required power difference
+    const requiredPowerDiff = getRequiredPowerDifference(effectiveCurrentRam);
+
+    // If the server is already maxed, don't upgrade
+    if (effectiveCurrentRam >= maxRam) {
+        return {
+            shouldUpgrade: false,
+            server: targetServer,
+            currentRam: currentRam,
+            targetRam: currentRam
+        };
     }
 
-    // Find the highest affordable RAM upgrade
-    let bestRam = nextRam;
-    let bestCost = getCostByRam(ns, nextRam);
+    // Calculate target RAM based on power difference
+    const currentPower = getRamPower(effectiveCurrentRam);
+    const targetPower = currentPower + requiredPowerDiff;
+    const targetRam = Math.min(maxRam, Math.pow(2, targetPower));
 
-    while (true) {
-        const potentialRam = bestRam * 2;
-        if (potentialRam > maxRam) break;
+    // Check if we can afford this upgrade
+    const cost = getCostByRam(ns, targetRam);
 
-        const potentialCost = getCostByRam(ns, potentialRam);
-        if (potentialCost > budget) break;
-
-        bestRam = potentialRam;
-        bestCost = potentialCost;
-    }
-
-    return { ram: bestRam, cost: bestCost };
+    return {
+        shouldUpgrade: cost <= budget,
+        server: targetServer,
+        currentRam: currentRam,
+        targetRam: targetRam
+    };
 }
 
 /**
@@ -173,7 +205,12 @@ function upgradeServer(ns: NS, server: string, currentRam: number, newRam: numbe
         return false;
     }
 
-    // Save the old RAM value before deleting
+    // For new servers
+    if (currentRam === 0) {
+        return buyServer(ns, server, newRam);
+    }
+
+    // For existing servers
     ns.print(`Upgrading server ${server} from ${formatRam(currentRam)} to ${formatRam(newRam)} RAM`);
 
     // Delete the server and buy a new one with the same name
@@ -194,10 +231,10 @@ function upgradeServer(ns: NS, server: string, currentRam: number, newRam: numbe
  */
 export function upgradeByBudget(ns: NS, maxRam: number, budget: number): boolean {
     // Find the server with the lowest RAM or determine if we need a new one
-    const { targetServer, currentRam, isNew } = planNextTarget(ns);
+    const { targetServer, currentRam, isNew } = planNextTarget(ns, 8);
 
-    // Minimum RAM for new servers is 2GB
-    const minRam = isNew ? 2 : (currentRam * 2);
+    // Minimum RAM for new servers is 8GB
+    const minRam = isNew ? 8 : (currentRam * 2);
 
     // Calculate the best upgrade we can afford
     const { ram: newRam, cost } = estimateCost(ns, currentRam, minRam, maxRam, budget);
@@ -209,12 +246,46 @@ export function upgradeByBudget(ns: NS, maxRam: number, budget: number): boolean
     }
 
     // Attempt to buy/upgrade the server
-    let success: boolean;
+    return upgradeServer(ns, targetServer, currentRam, newRam);
+}
 
-    if (isNew) {
-        success = buyServer(ns, targetServer, newRam);
-    } else {
-        success = upgradeServer(ns, targetServer, currentRam, newRam);
+/**
+ * Given a server, a min ram, a max ram, and a budget, return the ram and cost to upgrade the server to as high as possible
+ * @param ns - Netscript API
+ * @param currentRam - Current RAM of the server (0 if new server)
+ * @param minRam - Minimum RAM to upgrade to
+ * @param maxRam - Maximum RAM to upgrade to
+ * @param budget - Budget to spend
+ * @returns {Object} Object containing the ram and cost to upgrade the server. Returns {ram: current_ram, cost: 0} if not enough money to upgrade.
+ */
+function estimateCost(
+    ns: NS,
+    currentRam: number,
+    minRam: number,
+    maxRam: number,
+    budget: number
+): { ram: number, cost: number } {
+    const nextRam = Math.max(minRam, currentRam > 0 ? currentRam * 2 : minRam);
+
+    // If we can't even afford the next tier, return current RAM and cost 0
+    if (nextRam > maxRam || getCostByRam(ns, nextRam) > budget) {
+        return { ram: currentRam, cost: 0 };
     }
-    return success;
+
+    // Find the highest affordable RAM upgrade
+    let bestRam = nextRam;
+    let bestCost = getCostByRam(ns, nextRam);
+
+    while (true) {
+        const potentialRam = bestRam * 2;
+        if (potentialRam > maxRam) break;
+
+        const potentialCost = getCostByRam(ns, potentialRam);
+        if (potentialCost > budget) break;
+
+        bestRam = potentialRam;
+        bestCost = potentialCost;
+    }
+
+    return { ram: bestRam, cost: bestCost };
 }
