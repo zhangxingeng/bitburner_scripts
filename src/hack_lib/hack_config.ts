@@ -67,9 +67,9 @@ export class HackingConfig {
         /** Percentage of home RAM to reserve */
         homeRamReserve: 0.15,
         /** Maximum home RAM to reserve in GB */
-        maxHomeReserve: 128,
+        maxHomeReserve: 256,
         /** Minimum home RAM to reserve in GB */
-        minHomeReserve: 32,
+        minHomeReserve: 64,
         /** Minimum server RAM required to use */
         minServerRam: 2
     };
@@ -79,7 +79,19 @@ export class HackingConfig {
         /** Base sleep time between main cycles */
         baseSleepTime: 1000,
         /** Whether to print detailed debug logs */
-        debug: false
+        debug: false,
+        /** Interval (in ticks) between status updates */
+        statusUpdateInterval: 30,
+        /** Interval (in ticks) between RAM and target updates */
+        refreshInterval: 10
+    };
+
+    // Targeting configuration
+    readonly targetingConfig = {
+        /** Maximum number of targets to hack simultaneously */
+        maxTargets: 4,
+        /** Interval (in ticks) to re-scan and nuke servers */
+        nukeInterval: 50
     };
 
     /**

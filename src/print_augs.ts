@@ -1,7 +1,7 @@
 import { NS } from '@ns';
 
-const PURCHASE_AUGS = true;
-const PRINT_REMAINING_AUGS = true;
+const PURCHASE_AUGS = false;
+const PRINT_REMAINING_AUGS = false;
 
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');

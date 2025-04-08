@@ -6,7 +6,9 @@ import { NS } from '@ns';
  */
 export async function main(ns: NS): Promise<void> {
     const target = ns.args[0] as string;
-    const threads = (ns.args[1] as number) || 1;
+
+    // Get actual thread count from the running script
+    const threads = ns.getRunningScript()?.threads || 1;
 
     // Disable logs
     ns.disableLog('ALL');
@@ -34,12 +36,12 @@ export async function main(ns: NS): Promise<void> {
         // Prioritize security
         if (securityDiff > 0.1 * threads || securityDiff > 3) {
             ns.print(`Weakening ${target}: Security ${currentSecurity.toFixed(2)}/${minSecurity.toFixed(2)}`);
-            await ns.weaken(target, { threads: threads });
+            await ns.weaken(target);
         }
         // Then money
         else {
             ns.print(`Growing ${target}: Money ${ns.formatNumber(currentMoney)}/${ns.formatNumber(maxMoney)} (${(moneyPercent * 100).toFixed(2)}%)`);
-            await ns.grow(target, { threads: threads });
+            await ns.grow(target);
         }
     }
-} 
+}

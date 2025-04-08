@@ -59,22 +59,31 @@ export async function main(ns: NS): Promise<void> {
         ns.print('Distributed Hack started');
         ns.print(`Available RAM: ${Math.floor(ramManager.getTotalFreeRam())}GB across ${ramManager.getAvailableServers().length} servers`);
 
-        // Maximum targets to hack simultaneously
-        const MAX_TARGETS = 4;
-
         // Main loop
         let tick = 0;
 
         while (true) {
             try {
                 // Update resource information periodically
-                if (tick % 10 === 0) {
+                if (tick % config.executionConfig.refreshInterval === 0) {
+                    ramManager.updateRamInfo();
+                    targetManager.refreshTargets();
+                }
+
+                // Periodically try to nuke all servers again
+                // This is useful as you might purchase more port openers while script is running
+                if (tick % config.targetingConfig.nukeInterval === 0 && tick > 0) {
+                    ns.print('Periodically scanning and nuking servers...');
+                    const newNukedServers = scanAndNuke(ns);
+                    ns.print(`Now have root access to ${newNukedServers.size} servers`);
+
+                    // Update RAM and target information after gaining access to new servers
                     ramManager.updateRamInfo();
                     targetManager.refreshTargets();
                 }
 
                 // Get targets that need preparation
-                const unpreparedTargets = targetManager.getBestTargets(MAX_TARGETS, false)
+                const unpreparedTargets = targetManager.getBestTargets(config.targetingConfig.maxTargets, false)
                     .filter(target => !growManager.isServerPrepared(target));
 
                 // Prepare servers
@@ -87,11 +96,11 @@ export async function main(ns: NS): Promise<void> {
                 const batchesStarted = await batchManager.scheduleBatches(
                     targetManager,
                     ramManager,
-                    MAX_TARGETS
+                    config.targetingConfig.maxTargets
                 );
 
                 // Periodically print status and clean up
-                if (tick % 30 === 0) {
+                if (tick % config.executionConfig.statusUpdateInterval === 0) {
                     // Reset and update batch tracking
                     batchManager.pruneActiveBatches();
                     ns.print(`Status: ${batchManager.getTotalBatchesLaunched()} batches scheduled, ${batchesStarted} new batches started`);
@@ -119,4 +128,3 @@ export async function main(ns: NS): Promise<void> {
         ns.tprint(`FATAL ERROR in distributed_hack: ${error}`);
     }
 }
-

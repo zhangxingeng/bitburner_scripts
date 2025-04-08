@@ -117,9 +117,14 @@ export class RamManager {
      */
     reserveRam(amount: number, server: string): boolean {
         const info = this.servers.get(server);
-        if (!info || info.freeRam < amount) return false;
+        if (!info) return false;
 
-        info.freeRam -= amount;
+        // Add a 5% safety margin to RAM reservations
+        const amountWithMargin = amount * 1.05;
+
+        if (info.freeRam < amountWithMargin) return false;
+
+        info.freeRam -= amountWithMargin;
         return true;
     }
 
@@ -146,7 +151,8 @@ export class RamManager {
         const availableServers = this.getAvailableServers();
         return availableServers.map(server => {
             const freeRam = this.getFreeRam(server);
-            return Math.floor(freeRam / this.config.scriptRamCost);
+            // Account for the safety margin when calculating thread counts
+            return Math.floor(freeRam / (this.config.scriptRamCost * 1.05));
         });
     }
 }

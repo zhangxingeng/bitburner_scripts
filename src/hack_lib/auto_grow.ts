@@ -78,7 +78,7 @@ export class AutoGrowManager {
 
                 if (maxThreads > 0) {
                     this.ns.print(`Growing ${target} on ${bestServer} with ${maxThreads} threads`);
-                    const pid = execMulti(this.ns, bestServer, maxThreads, autoGrowScript, target, maxThreads);
+                    const pid = execMulti(this.ns, bestServer, maxThreads, autoGrowScript, target);
 
                     if (pid > 0) {
                         // Reserve the RAM in the manager
@@ -131,10 +131,7 @@ export class AutoGrowManager {
                 }
             }
 
-            if (allPrepared) {
-                this.ns.print('All servers prepared successfully');
-                return;
-            }
+            if (allPrepared) { return; }
 
             // Wait before checking again
             await this.ns.sleep(1000);

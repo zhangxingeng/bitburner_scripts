@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatRam, padNum } from './utils';
+import { formatRam, padNum } from './lib/utils';
 
 /** @param {NS} ns */
 export async function main(ns: NS): Promise<void> {
@@ -9,9 +9,16 @@ export async function main(ns: NS): Promise<void> {
         ns.disableLog('ALL');
         ns.ui.openTail();
         ns.ui.setTailTitle('Purchase Server');
+
         while (true) {
-            upgradeByBudget(ns, 1048576, ns.getServerMoneyAvailable('home') * 0.9);
-            await ns.sleep(1000);
+            const budget = ns.getServerMoneyAvailable('home') * 0.9;
+            if (isAllMaxed(ns, 1048576)) { break; }
+            if (budget > avgPrice(ns)) {
+                const success = upgradeByBudget(ns, 1048576, budget);
+                await ns.sleep(success ? 10 : 10000); // real wait if failed else basic wait
+            } else {
+                await ns.sleep(10000);
+            }
         }
     } else {
         const maxRam = Number(ns.args[0]);
@@ -28,6 +35,20 @@ export async function main(ns: NS): Promise<void> {
  */
 function getCostByRam(ns: NS, targetRam: number): number {
     return ns.getPurchasedServerCost(targetRam);
+}
+
+function isAllMaxed(ns: NS, maxRam: number): boolean {
+    const own_servers = ns.getPurchasedServers();
+    const server_rams = own_servers.map(server => ns.getServerMaxRam(server));
+    const max_server_count = ns.getPurchasedServerLimit();
+    return own_servers.length >= max_server_count && server_rams.every(ram => ram >= maxRam);
+}
+
+function avgPrice(ns: NS): number {
+    const own_servers = ns.getPurchasedServers();
+    const server_rams = own_servers.map(server => ns.getServerMaxRam(server));
+    const avg_ram = server_rams.reduce((a, b) => a + b, 0) / server_rams.length;
+    return getCostByRam(ns, avg_ram);
 }
 
 /**
@@ -171,7 +192,7 @@ function upgradeServer(ns: NS, server: string, currentRam: number, newRam: numbe
  * @param budget - Budget to spend
  * @returns {Object} Information about the upgrade that occurred
  */
-export function upgradeByBudget(ns: NS, maxRam: number, budget: number): void {
+export function upgradeByBudget(ns: NS, maxRam: number, budget: number): boolean {
     // Find the server with the lowest RAM or determine if we need a new one
     const { targetServer, currentRam, isNew } = planNextTarget(ns);
 
@@ -184,7 +205,7 @@ export function upgradeByBudget(ns: NS, maxRam: number, budget: number): void {
     // If we can't afford any upgrade, return failure
     if (cost === 0) {
         ns.print(`Cannot afford to upgrade server ${targetServer} from ${formatRam(currentRam)} RAM`);
-        return;
+        return false;
     }
 
     // Attempt to buy/upgrade the server
@@ -195,4 +216,5 @@ export function upgradeByBudget(ns: NS, maxRam: number, budget: number): void {
     } else {
         success = upgradeServer(ns, targetServer, currentRam, newRam);
     }
+    return success;
 }

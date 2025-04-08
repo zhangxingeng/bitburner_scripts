@@ -33,7 +33,11 @@ export function execMulti(
     const maxThreads = Math.floor(availableRam / scriptRam);
 
     if (maxThreads < 1) {
-        ns.print(`Not enough RAM on ${host} to run ${scriptPath}`);
+        // Only print RAM errors in debug mode or if it's an unusual case
+        const debug = false; // Set this to true to see all RAM errors
+        if (debug) {
+            ns.print(`Not enough RAM on ${host} to run ${scriptPath}`);
+        }
         return 0;
     }
 
