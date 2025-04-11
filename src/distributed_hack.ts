@@ -5,7 +5,14 @@ import { ServerTargetManager } from './hack_lib/server_target_manager';
 import { AutoGrowManager } from './hack_lib/auto_grow';
 import { BatchHackManager } from './hack_lib/batch_hack_manager';
 import { ThreadDistributionManager } from './hack_lib/thread_distribution_manager';
-import { scanAndNuke } from './lib/utils';
+
+async function nukeAll(ns: NS) {
+    const nukePs = await ns.exec('/lib/scan_nuke.js', 'home');
+    for (let i = 0; i < 1000; i++) {
+        if (!ns.isRunning(nukePs)) { break; }
+        await ns.sleep(100);
+    }
+}
 
 /**
  * High-income batch hacking script
@@ -47,15 +54,14 @@ export async function main(ns: NS): Promise<void> {
         const batchManager = new BatchHackManager(ns, config, threadManager);
 
         // Nuke all possible servers to maximize available resources
-        const nukedServers = scanAndNuke(ns);
-        ns.print(`Gained root access to ${nukedServers.size} servers`);
+
 
         // Update RAM information
         ramManager.updateRamInfo();
 
         // Update target information
         targetManager.refreshTargets();
-
+        await nukeAll(ns);
         ns.print('Distributed Hack started');
         ns.print(`Available RAM: ${Math.floor(ramManager.getTotalFreeRam())}GB across ${ramManager.getAvailableServers().length} servers`);
 
@@ -74,9 +80,7 @@ export async function main(ns: NS): Promise<void> {
                 // This is useful as you might purchase more port openers while script is running
                 if (tick % config.targetingConfig.nukeInterval === 0 && tick > 0) {
                     ns.print('Periodically scanning and nuking servers...');
-                    const newNukedServers = scanAndNuke(ns);
-                    ns.print(`Now have root access to ${newNukedServers.size} servers`);
-
+                    await nukeAll(ns);
                     // Update RAM and target information after gaining access to new servers
                     ramManager.updateRamInfo();
                     targetManager.refreshTargets();

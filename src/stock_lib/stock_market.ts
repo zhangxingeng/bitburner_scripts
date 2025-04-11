@@ -1,7 +1,7 @@
 import { NS } from '@ns';
 import { Stock } from './stock';
 import { StockConfig } from './stock_config';
-import { formatMoney, shortNumber } from '../lib/utils';
+import { formatMoney, shortNumber } from '../lib/util_normal_ram';
 import { ForecastHelper } from './forecast_helper';
 
 /**

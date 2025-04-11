@@ -1,9 +1,9 @@
 import { NS } from '@ns';
-import { formatMoney } from './lib/utils';
+import { formatMoney } from './lib/util_normal_ram';
 import { StockConfig } from './stock_lib/stock_config';
 import { StockMarket } from './stock_lib/stock_market';
 import { StockTrader } from './stock_lib/stock_trader';
-import { isSingleInstance } from './lib/utils';
+import { isSingleInstance } from './lib/util_normal_ram';
 
 // For HUD display
 interface HudElement extends HTMLElement {

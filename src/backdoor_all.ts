@@ -1,5 +1,6 @@
 import { NS } from '@ns';
-import { findAllPaths, traverse, gainRootAccess } from './lib/utils';
+import { findAllPaths, } from './lib/util_low_ram';
+import { traverse } from './lib/util_high_ram';
 
 // Important servers that should be backdoored for story progression
 const STORY_SERVERS = new Set([
@@ -23,22 +24,16 @@ const CORP_SERVERS = new Set([
  * Collect all servers that are eligible for backdooring
  * Prioritizes story servers, then corporate servers, then other servers
  */
-function collectEligibleServers(ns: NS): string[] {
+async function collectEligibleServers(ns: NS): Promise<string[]> {
     const boughtServers = new Set(ns.getPurchasedServers());
-    const serverPaths = findAllPaths(ns);
+    const serverPaths = await findAllPaths(ns);
     const storyServers: string[] = [];
     const corpServers: string[] = [];
     const otherServers: string[] = [];
-
     for (const [target, _] of serverPaths) {
-        // Skip home server and purchased servers
         if (target === 'home' || boughtServers.has(target)) continue;
-
-        // Skip already backdoored
         const server = ns.getServer(target);
         if (server.backdoorInstalled) continue;
-
-        // Categorize servers by priority
         if (STORY_SERVERS.has(target)) {
             storyServers.push(target);
         } else if (CORP_SERVERS.has(target)) {
@@ -47,8 +42,6 @@ function collectEligibleServers(ns: NS): string[] {
             otherServers.push(target);
         }
     }
-
-    // Return concatenated list with priority order
     return [...storyServers, ...corpServers, ...otherServers];
 }
 
@@ -121,17 +114,10 @@ async function backdoorService(ns: NS): Promise<void> {
 
     while (true) {
         try {
-            // Get all server paths
-            const serverPaths = findAllPaths(ns);
-
-            // Step 1: Collect eligible servers
-            const eligibleServers = collectEligibleServers(ns);
+            ns.exec('/lib/scan_nuke.js', 'home');
+            const serverPaths = await findAllPaths(ns);
+            const eligibleServers = await collectEligibleServers(ns);
             ns.print(`Found ${eligibleServers.length} eligible servers for backdooring`);
-
-            // Step 2: Root servers first
-            for (const server of eligibleServers) {
-                gainRootAccess(ns, server);
-            }
 
             // Step 3: Filter servers that can be hacked now
             const canHackServers = filterCanHackServers(ns, eligibleServers);
@@ -154,7 +140,7 @@ async function backdoorService(ns: NS): Promise<void> {
             }
 
             // Check if all servers are backdoored
-            const remainingServers = collectEligibleServers(ns);
+            const remainingServers = await collectEligibleServers(ns);
             if (remainingServers.length === 0) {
                 ns.tprint('SUCCESS: All possible servers have been backdoored!');
                 // Still continue the service to catch new servers that become available

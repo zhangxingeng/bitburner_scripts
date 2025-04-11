@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers, calculateServerValue } from '../lib/utils';
+import { findAllServers, calculateServerValue } from '../lib/util_normal_ram';
 import { FormulaHelper } from './formulas';
 
 /**

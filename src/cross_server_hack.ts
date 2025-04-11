@@ -1,11 +1,10 @@
 import { NS } from '@ns';
-import { findAllServers, formatMoney, formatTime, scanAndNuke } from './lib/utils';
+import { executeCommand } from './basic/simple_through_file';
+import { formatMoney, formatTime } from './lib/util_low_ram';
 
 /**
  * Main function for a simple hacking script that targets the most profitable server
  * and systematically weakens, grows, and hacks it.
- * 
- * @param {NS} ns - Netscript API
  */
 export async function main(ns: NS): Promise<void> {
     // Disable logs to reduce spam
@@ -22,31 +21,40 @@ export async function main(ns: NS): Promise<void> {
 
     // Initialize variables for tick-based approach
     let tick = 1;
-    const ROOT_ATTEMPT_INTERVAL = 10; // Every 10 ticks
-    const STATUS_UPDATE_INTERVAL = 5; // Every 5 ticks
-    const TARGET_SELECT_INTERVAL = 10; // Every 10 ticks
-    const CYCLE_INTERVAL = 1000; // 1 second per tick
+    const ROOT_ATTEMPT_INTERVAL = 20;
+    const STATUS_UPDATE_INTERVAL = 10;
+    const TARGET_SELECT_INTERVAL = 10;
+    const CYCLE_INTERVAL = 200;
 
     // Initialize target to null - we'll select one soon
     let currentTarget: string | null = null;
-    let servers = new Set<string>(['home']); // Start with home at minimum
+    let noTargetFoundCount = 0;
+
+    // Simple mode for very early game
+    const earlygameMode = ns.getPlayer().skills.hacking < 50;
+    let lastActionTime = 0;
+    const MIN_ACTION_INTERVAL = 5000; // Minimum 5 seconds between actions in early game
 
     // Main loop with tick-based management
     while (true) {
         try {
             // Scan and attempt to gain root access periodically
             if (tick % ROOT_ATTEMPT_INTERVAL === 0) {
-                ns.print('Scanning network for new targets...');
-                servers = scanAndNuke(ns);
+                try {
+                    ns.exec('/lib/scan_nuke.js', 'home');
+                } catch (error) {
+                    ns.print(`Error scanning: ${String(error)}`);
+                }
             }
 
             // Select or update target periodically
             if (tick % TARGET_SELECT_INTERVAL === 0 || currentTarget === null) {
-                currentTarget = getTargetServer(ns, Array.from(servers));
+                currentTarget = await getTargetServer(ns);
                 if (currentTarget) {
                     ns.print(`Selected target: ${currentTarget}`);
+                    noTargetFoundCount = 0;
                 } else {
-                    ns.print('No suitable target found. Will try again soon.');
+                    noTargetFoundCount++;
                     await ns.sleep(CYCLE_INTERVAL);
                     tick++;
                     continue;
@@ -55,22 +63,54 @@ export async function main(ns: NS): Promise<void> {
 
             // Main hacking logic - only proceed if we have a target
             if (currentTarget) {
+                // Check if we should wait between operations
+                const now = Date.now();
+                const timeSinceLastAction = now - lastActionTime;
+
+                if (earlygameMode && timeSinceLastAction < MIN_ACTION_INTERVAL) {
+                    // Wait for the minimum interval between actions in early game
+                    await ns.sleep(MIN_ACTION_INTERVAL - timeSinceLastAction);
+                    tick++;
+                    continue;
+                }
+
                 const hackResult = await executeOptimalAction(ns, currentTarget);
+
+                // Update the last action time
+                lastActionTime = Date.now();
 
                 // Update metrics based on action
                 if (hackResult.action === 'hack' && hackResult.success) {
                     totalMoneyHacked += hackResult.amount || 0;
                     totalSuccessfulHacks++;
                 }
+
+                // In early game, wait longer after each action to allow time for operations to complete
+                if (earlygameMode && hackResult.success) {
+                    if (hackResult.action === 'weaken') {
+                        await ns.sleep(MIN_ACTION_INTERVAL * 2);
+                    } else if (hackResult.action === 'grow') {
+                        await ns.sleep(MIN_ACTION_INTERVAL);
+                    } else {
+                        await ns.sleep(MIN_ACTION_INTERVAL / 2);
+                    }
+                }
             }
 
             // Display status periodically
-            if (tick % STATUS_UPDATE_INTERVAL === 0 && currentTarget) {
-                displayHackingStatus(ns, currentTarget, totalMoneyHacked, totalSuccessfulHacks, startTime);
+            if (tick % STATUS_UPDATE_INTERVAL === 0) {
+                if (currentTarget) {
+                    displayHackingStatus(ns, currentTarget, totalMoneyHacked, totalSuccessfulHacks, startTime);
+                } else {
+                    // Display minimal status when no target is available
+                    ns.clearLog();
+                    ns.print(`=== HACKING DASHBOARD (Runtime: ${formatTime((Date.now() - startTime) / 1000)}) ===\n`);
+                    ns.print('STATUS: Searching for viable targets...');
+                    ns.print(`Hacking Level: ${ns.getPlayer().skills.hacking}`);
+                }
             }
-
         } catch (error) {
-            ns.print(`ERROR: ${String(error)}`);
+            ns.print(`Error in main loop: ${String(error)}`);
         }
 
         // Wait for next tick
@@ -81,47 +121,51 @@ export async function main(ns: NS): Promise<void> {
 
 /**
  * Execute the most optimal action (weaken/grow/hack) based on current server conditions
- * @param {NS} ns - Netscript API
- * @param {string} target - Target server
- * @returns {Promise<{action: string, success: boolean, amount?: number}>} Action result
  */
 async function executeOptimalAction(
     ns: NS,
     target: string
 ): Promise<{ action: string, success: boolean, amount?: number }> {
-    const serverMoney = ns.getServerMoneyAvailable(target);
-    const maxMoney = ns.getServerMaxMoney(target);
-    const securityLevel = ns.getServerSecurityLevel(target);
-    const minSecurityLevel = ns.getServerMinSecurityLevel(target);
+    try {
+        const serverMoney = await executeCommand<number>(ns, `ns.getServerMoneyAvailable("${target}")`);
+        const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
+        const securityLevel = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${target}")`);
+        const minSecurityLevel = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
 
-    // Decide what action to take based on server conditions
-    if (securityLevel > minSecurityLevel + 5) {
-        // Security too high - weaken first
-        const threads = calculateWeakenThreads(ns, target, securityLevel, minSecurityLevel);
-        if (threads > 0) {
-            const success = runScript(ns, 'remote/weaken.js', target, threads);
-            ns.print(`Weakening ${target} with ${threads} threads`);
-            return { action: 'weaken', success };
+        // Decide what action to take based on server conditions
+        if (securityLevel > minSecurityLevel + 5) {
+            // Security too high - weaken first
+            const threads = await calculateWeakenThreads(ns, target);
+
+            if (threads > 0) {
+                const success = await runScript(ns, 'remote/weaken.js', target, threads);
+                ns.print(`Weakening ${target} with ${threads} threads`);
+                return { action: 'weaken', success };
+            }
         }
-    }
-    else if (serverMoney < maxMoney * 0.8) {
-        // Money too low - grow next
-        const threads = calculateGrowThreads(ns, target, serverMoney, maxMoney);
-        if (threads > 0) {
-            const success = runScript(ns, 'remote/grow.js', target, threads);
-            ns.print(`Growing ${target} with ${threads} threads`);
-            return { action: 'grow', success };
+        else if (serverMoney < maxMoney * 0.8) {
+            // Money too low - grow next
+            const threads = await calculateGrowThreads(ns, target);
+
+            if (threads > 0) {
+                const success = await runScript(ns, 'remote/grow.js', target, threads);
+                ns.print(`Growing ${target} with ${threads} threads`);
+                return { action: 'grow', success };
+            }
         }
-    }
-    else {
-        // Conditions optimal - hack
-        const threads = calculateHackThreads(ns, target);
-        if (threads > 0) {
-            const success = runScript(ns, 'remote/hack.js', target, threads);
-            const hackAmount = serverMoney * ns.hackAnalyze(target) * threads;
-            ns.print(`Hacking ${target} with ${threads} threads`);
-            return { action: 'hack', success, amount: hackAmount };
+        else {
+            // Conditions optimal - hack
+            const threads = await calculateHackThreads(ns, target, 0.5);
+
+            if (threads > 0) {
+                const success = await runScript(ns, 'remote/hack.js', target, threads);
+                const hackAmount = serverMoney * await executeCommand<number>(ns, `ns.hackAnalyze("${target}")`);
+                ns.print(`Hacking ${target} with ${threads} threads`);
+                return { action: 'hack', success, amount: hackAmount * threads };
+            }
         }
+    } catch (error) {
+        ns.print(`Error in executeOptimalAction: ${String(error)}`);
     }
 
     // Default return if no action was taken
@@ -129,13 +173,36 @@ async function executeOptimalAction(
 }
 
 /**
+ * Calculate threads needed for a weaken operation to reach min security
+ */
+async function calculateWeakenThreads(ns: NS, target: string): Promise<number> {
+    const currentSecurity = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${target}")`);
+    const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
+    const securityDiff = Math.max(0, currentSecurity - minSecurity);
+    const weakenAmount = await executeCommand<number>(ns, 'ns.weakenAnalyze(1)');
+    return Math.ceil(securityDiff / weakenAmount);
+}
+
+/**
+ * Calculate threads needed for a grow operation to reach max money
+ */
+async function calculateGrowThreads(ns: NS, target: string): Promise<number> {
+    const currentMoney = Math.max(1, await executeCommand<number>(ns, `ns.getServerMoneyAvailable("${target}")`));
+    const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
+    const growthFactor = maxMoney / currentMoney;
+    return Math.ceil(await executeCommand<number>(ns, `ns.growthAnalyze("${target}", ${growthFactor})`));
+}
+
+/**
+ * Calculate threads needed for a hack operation
+ */
+async function calculateHackThreads(ns: NS, target: string, hackFraction: number = 0.5): Promise<number> {
+    const hackPerThread = await executeCommand<number>(ns, `ns.hackAnalyze("${target}")`);
+    return Math.max(1, Math.floor(hackFraction / hackPerThread));
+}
+
+/**
  * Display a dashboard with hacking status and target information
- * 
- * @param {NS} ns - Netscript API
- * @param target - Current target server
- * @param totalMoneyHacked - Total money hacked so far
- * @param totalSuccessfulHacks - Total successful hacks
- * @param startTime - Time when the script started
  */
 function displayHackingStatus(
     ns: NS,
@@ -205,9 +272,8 @@ function displayHackingStatus(
     ns.print(`Profit per second: ${formatMoney(profitPerSecond)}/sec`);
 
     // Player information
-    const player = ns.getPlayer();
     ns.print('\nPLAYER STATS:');
-    ns.print(`Hacking Level: ${player.skills.hacking}`);
+    ns.print(`Hacking Level: ${ns.getPlayer().skills.hacking}`);
     ns.print(`Money: ${formatMoney(ns.getServerMoneyAvailable('home'))}`);
 
     // Current action
@@ -223,146 +289,285 @@ function displayHackingStatus(
 
 /**
  * Get the best target server for hacking based on calculated weights
- * 
- * @param {NS} ns - Netscript API
- * @param {string[]} servers - List of accessible servers
- * @returns Name of the best target server
  */
-function getTargetServer(ns: NS, servers: string[]): string {
-    // Filter for hackable servers with money
-    const targets = servers.filter(server =>
-        ns.hasRootAccess(server) &&
-        ns.getServerMaxMoney(server) > 0 &&
-        ns.getPlayer().skills.hacking >= ns.getServerRequiredHackingLevel(server)
-    );
+async function getTargetServer(ns: NS): Promise<string> {
+    try {
+        // Get all servers
+        const servers = await getAllServers(ns);
 
-    if (targets.length === 0) return '';
+        // Filter for hackable servers with money
+        const targets: string[] = [];
+        const hackingLevel = ns.getPlayer().skills.hacking;
 
-    // Sort servers by weight
-    return targets.sort((a, b) => {
-        const weightA = calculateServerWeight(ns, a);
-        const weightB = calculateServerWeight(ns, b);
-        return weightB - weightA; // Descending order
-    })[0];
+        // Early game mode - if hacking level is very low, just return 'n00dles' if we have access
+        if (hackingLevel < 10) {
+            for (const server of servers) {
+                if (server === 'n00dles') {
+                    const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                    if (hasRoot) {
+                        return 'n00dles';
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Regular target selection
+        for (const server of servers) {
+            try {
+                const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                if (!hasRoot) continue;
+
+                const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${server}")`);
+                if (maxMoney <= 0) continue;
+
+                const reqHackLevel = await executeCommand<number>(ns, `ns.getServerRequiredHackingLevel("${server}")`);
+                if (hackingLevel >= reqHackLevel) {
+                    targets.push(server);
+                }
+            } catch (error) {
+                ns.print(`Error checking server ${server}: ${String(error)}`);
+            }
+        }
+
+        if (targets.length === 0) {
+            // If no valid targets, try to find any server we can hack even with no money
+            for (const server of servers) {
+                try {
+                    if (server === 'home') continue;
+
+                    const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                    const reqHackLevel = await executeCommand<number>(ns, `ns.getServerRequiredHackingLevel("${server}")`);
+
+                    if (hasRoot && hackingLevel >= reqHackLevel) {
+                        return server;
+                    }
+                } catch (error) {
+                    ns.print(`Error checking fallback server ${server}: ${String(error)}`);
+                }
+            }
+            return '';
+        }
+
+        // Sort servers by weight
+        const targetWeights = [];
+        for (const server of targets) {
+            try {
+                const weight = await calculateServerWeight(ns, server);
+                targetWeights.push({ server, weight });
+            } catch (error) {
+                ns.print(`Error calculating weight for ${server}: ${String(error)}`);
+            }
+        }
+
+        if (targetWeights.length === 0) {
+            return '';
+        }
+
+        targetWeights.sort((a, b) => b.weight - a.weight); // Descending order
+        return targetWeights[0].server;
+    } catch (error) {
+        ns.print(`Critical error in getTargetServer: ${String(error)}`);
+
+        // Last resort - try to return any server that might work
+        try {
+            if (await executeCommand<boolean>(ns, 'ns.hasRootAccess("n00dles")')) {
+                return 'n00dles';
+            }
+
+            if (await executeCommand<boolean>(ns, 'ns.hasRootAccess("foodnstuff")')) {
+                return 'foodnstuff';
+            }
+
+            // Try to find any rooted server
+            const servers = await getAllServers(ns);
+            for (const server of servers) {
+                if (server !== 'home' && await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`)) {
+                    return server;
+                }
+            }
+        } catch (innerError) {
+            ns.print(`Failed to find fallback server: ${String(innerError)}`);
+        }
+
+        return '';
+    }
+}
+
+/**
+ * Get all servers in the network
+ */
+async function getAllServers(ns: NS): Promise<string[]> {
+    try {
+        // This function uses a simple queue-based BFS to find all servers
+        const visited = new Set<string>(['home']);
+        const queue = ['home'];
+        const servers: string[] = ['home'];
+
+        while (queue.length > 0) {
+            const current = queue.shift()!;
+
+            try {
+                // Get connected servers
+                const scanResult = await executeCommand<string>(ns, `JSON.stringify(ns.scan("${current}"))`);
+                const connected = JSON.parse(scanResult) as string[];
+
+                for (const server of connected) {
+                    if (!visited.has(server)) {
+                        visited.add(server);
+                        queue.push(server);
+                        servers.push(server);
+                    }
+                }
+            } catch (error) {
+                ns.print(`Error scanning server ${current}: ${String(error)}`);
+            }
+        }
+
+        return servers;
+    } catch (error) {
+        ns.print(`Error in getAllServers: ${String(error)}`);
+        return ['home']; // Return at least home if there's an error
+    }
 }
 
 /**
  * Calculate a weight score for a server to determine its hack value
- * 
- * @param {NS} ns - Netscript API
- * @param server - Server name
- * @returns Numeric weight score (higher is better)
  */
-function calculateServerWeight(ns: NS, server: string): number {
-    if (!server) return 0;
-    if (server.startsWith('hacknet-node')) return 0;
+async function calculateServerWeight(ns: NS, server: string): Promise<number> {
+    try {
+        if (!server) return 0;
+        if (server === 'home') return 0;
+        if (server.startsWith('hacknet-node')) return 0;
 
-    const player = ns.getPlayer();
-    const serverObj = ns.getServer(server);
+        // Get server stats using low RAM approach
+        const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${server}")`);
+        if (maxMoney <= 0) return 0;
 
-    // Skip servers we can't hack yet
-    if (!serverObj.requiredHackingSkill || serverObj.requiredHackingSkill > player.skills.hacking) return 0;
+        const hackChance = await executeCommand<number>(ns, `ns.hackAnalyzeChance("${server}")`);
+        if (hackChance <= 0) return 0;
 
-    // Early game weight calculation - simpler to save RAM
-    const serverMoney = ns.getServerMaxMoney(server);
-    const hackChance = ns.hackAnalyzeChance(server);
+        const weakenTime = await executeCommand<number>(ns, `ns.getWeakenTime("${server}")`);
+        if (weakenTime === 0) return 0;
 
-    // Factor in hack success chance, money, and time
-    return (serverMoney / ns.getWeakenTime(server)) * hackChance;
-}
+        // Early game modifier: boost weight for servers with higher money and lower security
+        const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${server}")`);
+        const currentSecurity = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${server}")`);
+        const securityRatio = minSecurity / Math.max(1, currentSecurity);
 
-/**
- * Calculate the number of threads needed to weaken a server to the desired security level
- * 
- * @param {NS} ns - Netscript API
- * @param target - Target server name
- * @param currentSecurity - Current security level
- * @param targetSecurity - Target security level
- * @returns Number of threads needed
- */
-function calculateWeakenThreads(ns: NS, target: string, currentSecurity: number, targetSecurity: number): number {
-    return Math.ceil((currentSecurity - targetSecurity) / ns.weakenAnalyze(1));
-}
+        // Calculate basic weight
+        let weight = (maxMoney / weakenTime) * hackChance;
 
-/**
- * Calculate the number of threads needed to grow a server to the desired money level
- * 
- * @param {NS} ns - Netscript API
- * @param target - Target server name
- * @param currentMoney - Current money available
- * @param targetMoney - Target money level
- * @returns Number of threads needed
- */
-function calculateGrowThreads(ns: NS, target: string, currentMoney: number, targetMoney: number): number {
-    // Prevent division by zero
-    if (currentMoney <= 0) currentMoney = 1;
-    return Math.ceil(ns.growthAnalyze(target, targetMoney / currentMoney));
-}
+        // Very early game (hacking level under 100): prioritize servers with lowest security
+        const hackingLevel = ns.getPlayer().skills.hacking;
+        if (hackingLevel < 100) {
+            // More heavily weight security level in early game
+            weight = weight * (securityRatio * 2);
 
-/**
- * Calculate the number of threads needed to hack money from a server
- * 
- * @param {NS} ns - Netscript API
- * @param target - Target server name
- * @returns Number of threads needed
- */
-function calculateHackThreads(ns: NS, target: string): number {
-    // For early game, we'll hack with a percentage of money instead of all
-    const hackFraction = 0.5; // Hack 50% of money
-    const hackPerThread = ns.hackAnalyze(target);
+            // Boost beginner servers
+            if (server === 'n00dles' || server === 'foodnstuff' || server === 'sigma-cosmetics' || server === 'joesguns') {
+                weight *= 10;
+            }
+        }
 
-    // Calculate threads needed for the desired fraction
-    return Math.max(1, Math.floor(hackFraction / hackPerThread));
+        return weight;
+    } catch (error) {
+        ns.print(`Error calculating weight for ${server}: ${String(error)}`);
+        return 0;
+    }
 }
 
 /**
  * Run a script with the specified number of threads across available servers
- * 
- * @param {NS} ns - Netscript API
- * @param scriptName - Name of the script to run
- * @param target - Target server name to pass to the script
- * @param threads - Number of threads to run
- * @returns {boolean} True if script was started successfully
  */
-function runScript(ns: NS, scriptName: string, target: string, threads: number): boolean {
-    if (threads <= 0) return false;
-
-    // Get all servers with root access that can run scripts
-    const allServers = findAllServers(ns)
-        .filter((server: string) => ns.hasRootAccess(server) && ns.getServerMaxRam(server) > 0);
-
-    const ramPerThread = ns.getScriptRam(scriptName);
-    let threadsRemaining = threads;
-
-    // Distribute script across available servers
-    for (const server of allServers) {
-        if (threadsRemaining <= 0) break;
-
-        // Use less RAM on home to keep it available for other scripts
-        const maxRam = server === 'home'
-            ? Math.floor(ns.getServerMaxRam(server) * 0.7) // Use 70% of home RAM
-            : ns.getServerMaxRam(server);
-
-        const availableRam = maxRam - ns.getServerUsedRam(server);
-        let possibleThreads = Math.floor(availableRam / ramPerThread);
-
-        if (possibleThreads <= 0) continue;
-
-        // Use only as many threads as needed
-        possibleThreads = Math.min(possibleThreads, threadsRemaining);
-
-        // Copy script to server if not home
-        if (server !== 'home') {
-            ns.scp(scriptName, server);
+async function runScript(ns: NS, scriptName: string, target: string, threads: number): Promise<boolean> {
+    try {
+        if (threads <= 0) {
+            return false;
         }
 
-        // Run the script
-        const pid = ns.exec(scriptName, server, possibleThreads, target);
-        if (pid > 0) {
-            threadsRemaining -= possibleThreads;
+        // Get all servers with root access that can run scripts
+        const allServers = await getAllServers(ns);
+        const servers: string[] = [];
+
+        for (const server of allServers) {
+            try {
+                const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                const maxRam = await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`);
+
+                if (hasRoot && maxRam > 0) {
+                    servers.push(server);
+                }
+            } catch (error) {
+                // Silently continue
+            }
         }
+
+        if (servers.length === 0) {
+            return false;
+        }
+
+        // Check if script exists and get RAM requirement
+        if (!ns.fileExists(scriptName, 'home')) {
+            return false;
+        }
+
+        const ramPerThread = ns.getScriptRam(scriptName);
+        let threadsRemaining = threads;
+        let anyThreadsAllocated = false;
+
+        // Distribute script across available servers
+        for (const server of servers) {
+            if (threadsRemaining <= 0) {
+                break;
+            }
+
+            try {
+                // Use less RAM on home to keep it available for other scripts
+                const maxRam = server === 'home'
+                    ? Math.floor(await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`) * 0.7) // Use 70% of home RAM
+                    : await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`);
+
+                const usedRam = await executeCommand<number>(ns, `ns.getServerUsedRam("${server}")`);
+                const availableRam = maxRam - usedRam;
+                let possibleThreads = Math.floor(availableRam / ramPerThread);
+
+                if (possibleThreads <= 0) {
+                    continue;
+                }
+
+                // Use only as many threads as needed
+                possibleThreads = Math.min(possibleThreads, threadsRemaining);
+
+                // Copy script to server if not home
+                if (server !== 'home') {
+                    try {
+                        await ns.scp(scriptName, server);
+                    } catch (error) {
+                        continue;
+                    }
+                }
+
+                // Run the script with target as argument
+                try {
+                    const pid = ns.exec(scriptName, server, possibleThreads, target);
+
+                    if (pid > 0) {
+                        threadsRemaining -= possibleThreads;
+                        anyThreadsAllocated = true;
+                    }
+                } catch (error) {
+                    // Silently continue
+                }
+            } catch (error) {
+                // Silently continue
+            }
+        }
+
+        // Return true if ANY threads were allocated (partial success)
+        return anyThreadsAllocated;
+    } catch (error) {
+        ns.print(`Error in runScript: ${String(error)}`);
+        return false;
     }
-
-    // Return true if all threads were allocated
-    return threadsRemaining === 0;
 }

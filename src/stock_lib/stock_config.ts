@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { checkOwnSF } from '../lib/utils';
+import { checkOwnSF } from '../lib/util_high_ram';
 
 /**
  * Configuration for stock trading operations

@@ -1,6 +1,5 @@
 import { NS } from '@ns';
 import { execMulti } from './exec_multi';
-import { scanAndNuke } from '../lib/utils';
 import { HackingConfig } from './hack_config';
 import { RamManager } from './ram_manager';
 

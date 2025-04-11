@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatRam, padNum } from './lib/utils';
+import { formatRam, padNum } from './lib/util_normal_ram';
 
 /** @param {NS} ns */
 export async function main(ns: NS): Promise<void> {

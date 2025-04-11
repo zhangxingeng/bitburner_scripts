@@ -1,5 +1,6 @@
 import { NS } from '@ns';
-import { getPaths, traverse } from './lib/utils';
+import { getPaths } from './lib/util_normal_ram';
+import { traverse } from './lib/util_high_ram';
 
 
 /** @param {NS} ns */

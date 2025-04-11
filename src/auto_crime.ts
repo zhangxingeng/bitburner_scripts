@@ -1,6 +1,6 @@
 import { NS, Player } from '@ns';
 import { CrimeType, GymType, UniversityClassType, CrimeStats } from './lib/ns_types';
-import { shortNumber, formatPercent } from './lib/utils';
+import { shortNumber, formatPercent } from './lib/util_low_ram';
 
 
 /** Training multiplier for actions (how many times to train before checking stats) */

@@ -2,7 +2,7 @@ import { NS } from '@ns';
 import { StockConfig } from './stock_config';
 import { StockMarket } from './stock_market';
 import { Stock } from './stock';
-import { formatMoney } from '../lib/utils';
+import { formatMoney } from '../lib/util_normal_ram';
 import { Player } from '@ns';
 
 /**

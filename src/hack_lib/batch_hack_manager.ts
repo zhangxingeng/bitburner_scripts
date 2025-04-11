@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatPercent, formatMoney } from '../lib/utils';
+import { formatPercent, formatMoney } from '../lib/util_low_ram';
 import { RamManager } from './ram_manager';
 import { ServerTargetManager } from './server_target_manager';
 import { ThreadDistributionManager } from './thread_distribution_manager';

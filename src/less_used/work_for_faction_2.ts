@@ -1,5 +1,5 @@
 import { NS, FactionWorkType, CompanyName } from '@ns';
-import { formatTime, shortNumber } from './lib/utils';
+import { formatTime, shortNumber } from '../lib/util_normal_ram';
 
 // Constants
 const STATUS_UPDATE_INTERVAL = 5000; // 5 seconds for status updates
