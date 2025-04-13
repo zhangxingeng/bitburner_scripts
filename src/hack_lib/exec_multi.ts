@@ -1,7 +1,10 @@
 import { NS } from '@ns';
+import { ensureScriptExists } from '../lib/utils_extra';
 
 /**
  * Execute a script with multiple threads on a target server
+ * Converted from the original hack/bat/exec-multi.js implementation
+ * 
  * @param ns NS object 
  * @param host Host to run script on
  * @param threads Number of threads to run
@@ -61,43 +64,8 @@ export function execMulti(
 }
 
 /**
- * Distribute script execution across multiple servers
- * @param ns NS object
- * @param scriptPath Path to the script
- * @param totalThreads Total threads needed
- * @param serverAllocation Thread allocation map (server index -> thread count)
- * @param serverList List of servers (index corresponds to allocation map)
- * @param args Script arguments
- * @returns Total number of threads successfully executed
- */
-export function distributeExecution(
-    ns: NS,
-    scriptPath: string,
-    totalThreads: number,
-    serverAllocation: number[],
-    serverList: string[],
-    ...args: (string | number | boolean)[]
-): number {
-    let executedThreads = 0;
-
-    // Execute on each server according to allocation
-    for (let i = 0; i < serverAllocation.length; i++) {
-        const threads = serverAllocation[i];
-        if (threads <= 0) continue;
-
-        const server = serverList[i];
-        const pid = execMulti(ns, server, threads, scriptPath, ...args);
-
-        if (pid > 0) {
-            executedThreads += threads;
-        }
-    }
-
-    return executedThreads;
-}
-
-/**
  * Auto-kill and restart a script with multiple threads
+ * 
  * @param ns NS object
  * @param host Host to run script on
  * @param threads Number of threads to run
@@ -122,7 +90,52 @@ export function execMultiAutoKill(
 }
 
 /**
+ * Distribute script execution across multiple servers
+ * 
+ * @param ns NS object
+ * @param scriptPath Path to the script
+ * @param totalThreads Total threads needed
+ * @param serverAllocation Thread allocation map (server index -> thread count)
+ * @param serverList List of servers (index corresponds to allocation map)
+ * @param args Script arguments
+ * @returns Total number of threads successfully executed
+ */
+export function distributeExecution(
+    ns: NS,
+    scriptPath: string,
+    totalThreads: number,
+    serverAllocation: number[],
+    serverList: string[],
+    ...args: (string | number | boolean)[]
+): number {
+    if (totalThreads <= 0) return 0;
+
+    let executedThreads = 0;
+
+    // Execute on each server according to allocation
+    for (let i = 0; i < serverAllocation.length; i++) {
+        const threads = serverAllocation[i];
+        if (threads <= 0) continue;
+
+        const server = serverList[i];
+
+        // Copy script if needed
+        ensureScriptExists(ns, scriptPath, server);
+
+        // Execute the script
+        const pid = execMulti(ns, server, threads, scriptPath, ...args);
+
+        if (pid > 0) {
+            executedThreads += threads;
+        }
+    }
+
+    return executedThreads;
+}
+
+/**
  * Get maximum threads for a script on a server
+ * 
  * @param ns NS object
  * @param host Host to check
  * @param scriptPath Path to the script

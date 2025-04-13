@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { executeCommand, scan } from '../basic/simple_through_file';
+import { executeCommand } from '../basic/simple_through_file';
 
 
 /**
@@ -17,7 +17,7 @@ export async function* scanNetwork(ns: NS, fromServer: string = 'home'): AsyncGe
         if (visited.has(current)) continue;
         visited.add(current);
         yield path; // found new, yield path
-        for (const neighbor of await scan(ns, current)) {
+        for (const neighbor of ns.scan(current)) {
             if (!visited.has(neighbor)) {
                 queue.push([neighbor, [...path, neighbor]]);
             }
@@ -109,23 +109,15 @@ export async function getPaths(ns: NS, regex_str: string, pathCache: Map<string,
 /**
  * Ensures only one instance of the script runs
  * @param {NS} ns - Netscript API
- * @param {boolean} kill_other - Whether to kill other instances if found
  * @returns {boolean} True if no other instances were running (or they were killed)
  */
-export async function isSingleInstance(ns: NS, kill_other: boolean = false): Promise<boolean> {
-    const hostname = await executeCommand<string>(ns, 'ns.getHostname()');
-    const processListStr = await executeCommand<string>(ns, `JSON.stringify(ns.ps("${hostname}"))`);
-    const running_pids = JSON.parse(processListStr);
-    const scriptName = await executeCommand<string>(ns, 'ns.getScriptName()');
-    const currentPid = await executeCommand<number>(ns, 'ns.pid');
+export function isSingleInstance(ns: NS): boolean {
+    const hostname = ns.getHostname();
+    const running_pids = ns.ps(hostname);
+    const scriptName = ns.getScriptName();
+    const currentPid = ns.pid;
     const other_pids = running_pids.filter((s: { filename: string; pid: number }) =>
         s.filename === scriptName && s.pid !== currentPid);
-    if (kill_other && other_pids.length > 0) {
-        for (const process of other_pids) {
-            await executeCommand<boolean>(ns, `ns.kill(${process.pid})`);
-        }
-        ns.tprint('All previous instances killed');
-    }
     return other_pids.length === 0;
 }
 
@@ -256,9 +248,8 @@ export function padNum(num: number, len: number): string {
  */
 export async function getHackableServers(ns: NS, servers?: string[]): Promise<string[]> {
     const serverList = servers || await findAllServers(ns);
-    const hackLevel = await executeCommand<number>(ns, 'ns.getHackingLevel()');
-    const purchasedServers = await executeCommand<string>(ns, 'JSON.stringify(ns.getPurchasedServers())');
-    const purchasedServersList = JSON.parse(purchasedServers);
+    const hackLevel = ns.getHackingLevel();
+    const purchasedServers = await executeCommand<string[]>(ns, 'ns.getPurchasedServers()');
 
     // Filter servers that can be hacked
     const hackableServers = [];
@@ -266,14 +257,14 @@ export async function getHackableServers(ns: NS, servers?: string[]): Promise<st
 
     for (const server of serverList) {
         // Skip purchased servers and home
-        if (server === 'home' || purchasedServersList.includes(server)) {
+        if (server === 'home' || purchasedServers.includes(server)) {
             continue;
         }
 
         // Only include rooted servers with money that we can hack
-        const requiredLevel = await executeCommand<number>(ns, `ns.getServerRequiredHackingLevel("${server}")`);
-        const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${server}")`);
-        const hasRootAccess = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+        const requiredLevel = ns.getServerRequiredHackingLevel(server);
+        const maxMoney = ns.getServerMaxMoney(server);
+        const hasRootAccess = ns.hasRootAccess(server);
 
         // Store the required level for sorting later
         serverLevels.set(server, requiredLevel);
@@ -295,10 +286,10 @@ export async function getHackableServers(ns: NS, servers?: string[]): Promise<st
  * @returns {number} Server value score
  */
 export async function calculateServerValue(ns: NS, target: string): Promise<number> {
-    const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
-    const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
+    const maxMoney = ns.getServerMaxMoney(target);
+    const minSecurity = ns.getServerMinSecurityLevel(target);
     const hackChance = await executeCommand<number>(ns, `ns.hackAnalyzeChance("${target}")`);
-    const hackTime = await executeCommand<number>(ns, `ns.getHackTime("${target}")`);
+    const hackTime = ns.getHackTime(target);
 
     // Calculate a balanced score based on multiple factors
     const moneyScore = maxMoney;
@@ -319,10 +310,11 @@ export async function calculateServerValue(ns: NS, target: string): Promise<numb
  * @returns {number} - Number of threads needed
  */
 export async function calculateWeakenThreads(ns: NS, target: string): Promise<number> {
-    const currentSecurity = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${target}")`);
-    const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
+    const currentSecurity = ns.getServerSecurityLevel(target);
+    const minSecurity = ns.getServerMinSecurityLevel(target);
     const securityDiff = Math.max(0, currentSecurity - minSecurity);
-    return Math.ceil(securityDiff / ns.weakenAnalyze(1));
+    const weakenPerThread = await executeCommand<number>(ns, `ns.weakenAnalyze("${target}", 1)`);
+    return Math.ceil(securityDiff / weakenPerThread);
 }
 
 
@@ -333,10 +325,11 @@ export async function calculateWeakenThreads(ns: NS, target: string): Promise<nu
  * @returns {number} - Number of threads needed
  */
 export async function calculateGrowThreads(ns: NS, target: string): Promise<number> {
-    const currentMoney = Math.max(1, await executeCommand<number>(ns, `ns.getServerMoneyAvailable("${target}")`));
-    const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
+    const currentMoney = Math.max(1, ns.getServerMoneyAvailable(target));
+    const maxMoney = ns.getServerMaxMoney(target);
     const growthFactor = maxMoney / currentMoney;
-    return Math.ceil(await executeCommand<number>(ns, `ns.growthAnalyze("${target}", ${growthFactor})`));
+    const growthPerThread = await executeCommand<number>(ns, `ns.growthAnalyze("${target}", ${growthFactor})`);
+    return Math.ceil(growthPerThread);
 }
 
 /**

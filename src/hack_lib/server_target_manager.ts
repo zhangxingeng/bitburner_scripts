@@ -127,4 +127,48 @@ export class ServerTargetManager {
         const player = this.ns.getPlayer();
         return this.formulas.getHackChance(server, player) >= 1.0;
     }
+
+    /**
+     * Print status of server targets in a compact format
+     */
+    printStatus(): void {
+        // Update prepared status
+        this.updatePreparedStatus();
+
+        // Get total count of targets
+        const totalTargets = this.targetServers.length;
+        const preparedCount = this.preparedServers.size;
+
+        // Get top 3 targets by value
+        const topTargets = this.targetServers.slice(0, 3);
+        const topTargetValues = topTargets.map(target => {
+            return {
+                name: target,
+                value: this.targetValues.get(target) || 0,
+                prepared: this.preparedServers.has(target)
+            };
+        });
+
+        // Build compact stats panel
+        const statsPanel = [
+            '┌─── SERVER TARGETS ───┐',
+            `│ Total Targets: ${totalTargets.toString().padEnd(7)} │`,
+            `│ Prepared:      ${preparedCount.toString().padEnd(7)} │`,
+            '├───────────────────────┤',
+            '│ Top Targets:           │'
+        ];
+
+        // Add top targets
+        for (let i = 0; i < topTargetValues.length; i++) {
+            const target = topTargetValues[i];
+            const status = target.prepared ? '✓' : '✗';
+            statsPanel.push(
+                `│ ${(i + 1)}. ${target.name.padEnd(15)} ${status} │`
+            );
+        }
+
+        statsPanel.push('└───────────────────────┘');
+
+        this.ns.print(statsPanel.join('\n'));
+    }
 }

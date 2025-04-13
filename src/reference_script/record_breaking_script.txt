@@ -1,0 +1,1880 @@
+================================================
+FILE: src/template.ts
+================================================
+import { NS } from "@ns";
+
+export async function main(ns: NS): Promise<void> {
+  ns.tprint("Hello Remote API!");
+}
+
+
+
+================================================
+FILE: src/hack/hack-node.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const myMoney = ()=>ns.getServerMoneyAvailable("home");
+
+	const actionCost = [];
+	const action = [];
+
+	actionCost.push(ns.hacknet.getPurchaseNodeCost);
+	action.push(ns.hacknet.purchaseNode);
+
+	//init
+	for (let i=0; i<ns.hacknet.numNodes(); ++i){
+		actionCost.push(()=>ns.hacknet.getLevelUpgradeCost(i));
+		action.push(()=>ns.hacknet.upgradeLevel(i));
+
+		actionCost.push(()=>ns.hacknet.getRamUpgradeCost(i));
+		action.push(()=>ns.hacknet.upgradeRam(i));
+
+		actionCost.push(()=>ns.hacknet.getCoreUpgradeCost(i));
+		action.push(()=>ns.hacknet.upgradeCore(i));
+	}
+
+	while(true) {
+		await ns.sleep(1);
+
+		let minCost=actionCost[0]();
+		let minCostI=0;
+		for(let i in action) {
+			if (action[i]===ns.hacknet.purchaseNode) {
+				if (ns.hacknet.numNodes() === ns.hacknet.maxNumNodes()) {
+					continue;
+				}
+			}
+
+			if (actionCost[i]() < minCost) {
+				minCost = actionCost[i]();
+				minCostI = i;
+			}
+		}
+
+		const cost = minCost;
+		const i = minCostI;
+		if (cost < myMoney()) {
+			//check production
+			let totalProd = 0;
+			for (let j=0; j<ns.hacknet.numNodes(); ++j) {
+				totalProd += ns.hacknet.getNodeStats(j).production;
+			}
+			if (totalProd!=0 && cost / totalProd > 60) {
+				ns.print("The cheapest upgrade costs more than one minute to earn, the script has stopped");
+				ns.exit();
+			}
+
+			action[i]();
+
+			if (action[i]===ns.hacknet.purchaseNode) {
+				let newInd = ns.hacknet.numNodes() - 1;
+				actionCost.push(()=>ns.hacknet.getLevelUpgradeCost(newInd));
+				action.push(()=>ns.hacknet.upgradeLevel(newInd));
+
+				actionCost.push(()=>ns.hacknet.getRamUpgradeCost(newInd));
+				action.push(()=>ns.hacknet.upgradeRam(newInd));
+
+				actionCost.push(()=>ns.hacknet.getCoreUpgradeCost(newInd));
+				action.push(()=>ns.hacknet.upgradeCore(newInd));
+			}
+		}
+	}
+}
+
+
+================================================
+FILE: src/hack/bat/allocator.js
+================================================
+export default class Allocator {
+	/** @param {number[]} availableAllocs */
+	constructor(availableAllocs) {
+		this.availableAllocs = availableAllocs.slice();
+		this.availableAscRank = availableAllocs.map((val, ind)=>ind);
+		this._rerank();
+	}
+
+	_rerank() {
+		this.availableAscRank = this.availableAllocs.map((val, ind)=>ind)
+			.sort((indA, indB) => this.availableAllocs[indA] - this.availableAllocs[indB]);
+	}
+
+	/** 
+	 * @param {number} count
+	 * @param {boolean} splitable
+	 * @return allocation result
+	 */
+	alloc(count, splitable=true) {
+		const availableAllocTmp = this.availableAllocs.slice();
+		const allocation = this.availableAllocs.map(()=>0);
+
+		if (splitable) {
+			for (let i=0; i<this.availableAscRank.length; ++i) {
+				const curAlloc = Math.min(this.availableAllocs[this.availableAscRank[i]], count);
+				availableAllocTmp[this.availableAscRank[i]] -= curAlloc;
+				allocation[this.availableAscRank[i]] += curAlloc;
+				count -= curAlloc;
+				if (count === 0) {
+					break;
+				}
+			}
+		} else {
+			for (let i=0; i<this.availableAscRank.length; ++i) {
+				if (this.availableAllocs[this.availableAscRank[i]] >= count) {
+					availableAllocTmp[this.availableAscRank[i]] -= count;
+					allocation[this.availableAscRank[i]] += count;
+					count = 0;
+					break;
+				}
+			}
+		}
+
+		if (count === 0) {
+			this.availableAllocs = availableAllocTmp;
+			this._rerank();
+			return {success:true, allocation:allocation};
+		} else {
+			return {success:false, allocation:this.availableAllocs.map(()=>0)};
+		}
+	}
+
+	/** 
+	 * @param {number[]} allocation
+	 */
+	free(allocation) {
+		for (let i=0; i<allocation.length; ++i) {
+			this.availableAllocs[i]+=allocation[i];
+		}
+		this._rerank();
+	}
+}
+
+
+================================================
+FILE: src/hack/bat/auto-grow.js
+================================================
+import {execMulti} from "/hack/bat/exec-multi.js";
+import * as config from "/hack/bat/config.js";
+import {scriptBaseCostGet} from "/hack/bat/config.js";
+import * as formu from "/hack/bat/formulas.js";
+
+const autoGrowScript = config.autoGrowScriptGet();
+
+const arrAdd = (arrA, arrB) => arrA.map((aEle, aInd) => aEle + arrB[aInd]);
+const arrMinus = (arrA, arrB) => arrA.map((aEle, aInd) => aEle - arrB[aInd]);
+const arrCal = (arrA, arrB, cal) => arrA.map((aEle, aInd) => cal(aEle, arrB[aInd]));
+
+/** 
+ * @param {NS} ns 
+ * @param {function(string):void} log logging function
+ * @param {string} target target server hostname
+ * @param {{dps:number, tpb:number
+	hackServerAlloc:number[][], growServerAlloc:number[][], weaken1ServerAlloc:number[][], weaken2ServerAlloc:number[][],
+	concurrency:number, secondPerBatch:number, batchGap:number, 
+	hackPerBatch:number, growPerBatch:number
+	weaken1Time:number, weaken2Time:number, hackTime:number, growTime:number}} calcResult for single target
+ * @param {string[]} availableServers
+ */
+export async function autoGrow(ns, log, target, calcResult, availableServers) {
+	log(`execute auto-grow for target:${target}...`);
+
+	//{number[][]} for batch allocations
+	const hackServers = calcResult.hackServerAlloc;
+	const growServers = calcResult.growServerAlloc;
+	const weaken1Servers = calcResult.weaken1ServerAlloc;
+	const weaken2Servers = calcResult.weaken2ServerAlloc;
+
+	//total allocations
+	const totalOnServers = [hackServers, growServers, weaken1Servers, weaken2Servers]
+		.filter(batches => batches && batches.length > 0)
+		.map(batches => batches.reduce(arrAdd))
+		.reduce(arrAdd, availableServers.map(x=>0));
+
+	const scriptCostGB = ns.getScriptRam(autoGrowScript);
+
+	for (let i in availableServers) {
+		const totalAllocOnServerGB = scriptBaseCostGet() * totalOnServers[i];
+		const autoGrowThd = Math.floor(totalAllocOnServerGB / scriptCostGB);
+
+		if (autoGrowThd < 1) {
+			continue;
+		}
+		
+		log(` exec ${autoGrowThd} threads on ${availableServers[i]} for target:${target}`);
+		execMulti(ns, availableServers[i], autoGrowThd, autoGrowScript, target, "$threads");
+	}
+
+	//return a checker for wheter auto-grow finished
+	return () => {
+		let isAllStopped = true;
+		for (let i in availableServers) {
+			if (ns.scriptRunning(autoGrowScript, availableServers[i])) {
+				isAllStopped = false;
+				break;
+			}
+		}
+
+		if (isAllStopped) {
+			log("all grow finished");
+		}
+
+		return isAllStopped;
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {function(string):void} log logging function
+ * @param {string[]} targets target server hostnames
+ * @param {string[]} availableServers
+ */
+export async function autoGrowSimple(ns, log, targets, availableServers) {
+	log(`execute targets:${targets}`);
+	const scriptCostGB = ns.getScriptRam(autoGrowScript);
+	const serverRams = availableServers.map(serverName=>ns.getServerMaxRam(serverName) - ns.getServerUsedRam(serverName));
+	
+	const targetGrowTimes = targets.map(serverName=>formu.getGrowTime(ns, ns.getServer(serverName), ns.getPlayer()));
+	const targetGrowGains = targets.map(serverName=>ns.getServerGrowth(serverName));
+	const targetGrowProgressPercent = targets.map(serverName=>(ns.getServerMaxMoney(serverName) - ns.getServerMoneyAvailable(serverName))/ns.getServerMaxMoney(serverName));
+	
+	// A simple scoring method accounting for grow difficaulty, grow time(hack skill required), and current grow progress.
+	const targetGrowGainsPerUnitTime = arrCal(targetGrowGains, targetGrowTimes, (gain, time)=>gain/time);
+	const targetGrowCosts = arrCal(targetGrowGainsPerUnitTime, targetGrowProgressPercent, 
+		(gput, progress) => (1-progress) * gput);
+
+	const targetGrowCostDescOrderedIndices = new Array(targets.length);
+	for (let i in targets) targetGrowCostDescOrderedIndices[i] = i;
+	targetGrowCostDescOrderedIndices.sort((a,b)=> targetGrowCosts[b] - targetGrowCosts[a]);
+
+	const availableServersRamDescOrderedIndices = new Array(availableServers.length);
+	for (let i in availableServers) availableServersRamDescOrderedIndices[i] = i;
+	availableServersRamDescOrderedIndices.sort((a,b)=> serverRams[b] - serverRams[a]);
+	
+
+	for (let index in targetGrowCostDescOrderedIndices) {
+		const curTarget = targets[targetGrowCostDescOrderedIndices[index]];
+		log(`auto-growing:${curTarget}`);
+
+		//TODO ensuring allocation servers count match targets' count (avoid outOfBoundsExceptions);
+		//Now here is assuming target is less than allocation servers
+		const curAvailableServer = availableServers[availableServersRamDescOrderedIndices[index]];
+		const growThd = Math.floor(serverRams[availableServersRamDescOrderedIndices[index]] / scriptCostGB);
+		log(` exec thds ${growThd} on ${curAvailableServer} for target ${curTarget}`);
+		execMulti(ns, curAvailableServer, growThd, autoGrowScript, curTarget, "$threads");
+	}
+
+	for (let target of targets) {
+		log(`auto-growing:${target}`);
+
+		// concentrate hack power to shorten grow time
+		for (let execServerInd in availableServers) {
+			const growThd = Math.floor(serverRams[execServerInd] / scriptCostGB);
+			log(` exec thds ${growThd} on target ${target}`);
+			execMulti(ns, availableServers[execServerInd], growThd, autoGrowScript, target, "$threads");
+		}
+	}
+
+	// wait until target is maximized
+	while (true) {
+		await ns.sleep(1);
+
+		let isAllStopped = true;
+		for (let i in availableServers) {
+			if (ns.scriptRunning(autoGrowScript, availableServers[i])) {
+				isAllStopped = false;
+				break;
+			}
+		}
+
+		if (isAllStopped) {
+			log("all grow finished");
+			break; 
+		}
+	}
+}
+
+
+================================================
+FILE: src/hack/bat/config.js
+================================================
+const local = "home"
+const hackScript = "/hack/bat/action/do-hack.js";
+const growScript = "/hack/bat/action/do-grow.js";
+const weaken1Script = "/hack/bat/action/do-weaken1.js";
+const weaken2Script = "/hack/bat/action/do-weaken2.js";
+const autoGrowScript = "/hack/bat/prepare/grow.js";
+const multiExecutorScript = "/hack/bat/exec-multi.js";
+const stepTimeMillis = 20;
+const maxConcurrency = -1;
+const maxHackPerBatch = -1;
+const twoWeakenOpts = true;
+const preparationsLogFile = "masterV2RunInfo.txt";
+const scriptBaseCost = 1.75;
+
+export function localGet(){ return local; }
+export function hackScriptGet(){ return hackScript; }
+export function growScriptGet(){ return growScript; }
+export function weaken1ScriptGet(){ return weaken1Script; }
+export function weaken2ScriptGet(){ return weaken2Script; }
+export function autoGrowScriptGet(){ return autoGrowScript; }
+export function multiExecutorScriptGet(){ return multiExecutorScript; }
+export function stepTimeMillisGet(){ return stepTimeMillis; }
+export function maxConcurrencyGet(){ return maxConcurrency; }
+export function maxHackPerBatchGet(){ return maxHackPerBatch; }
+export function twoWeakenOptsGet(){ return twoWeakenOpts; }
+export function preparationsLogFileGet(){ return preparationsLogFile; }
+export function scriptBaseCostGet(){ return scriptBaseCost; }
+
+
+================================================
+FILE: src/hack/bat/exec-multi.js
+================================================
+import {getMaxThreads} from "/lib/calculations.js";
+import {replaceArgs} from "/lib/arguments.js";
+import {expandPath} from "/lib/files.js";
+
+/** @param {NS} ns */
+export async function main(ns) {
+	ns.tprint("\n");
+	
+	if (ns.args.length < 3) {
+		ns.tprint("usage: run exec-muti.js <host> <threads> <script> [ <args>... ]\n", 
+			"Where threads is an int or the string 'max', default to 'max'.\n",
+			"This script is designed to run on home machine.\n");
+		ns.exit();
+	}
+
+	execMultiAutoKill(ns, ...ns.args);
+
+	ns.tprint("Execution started.");
+}
+
+export async function execMultiAutoKill(ns, argHost, argThd, argScript, ...args) {
+	const host = argHost;
+	const script = expandPath(ns.getScriptName(), argScript);
+
+	if (ns.scriptRunning(script, host)) {
+		ns.scriptKill(script, host);
+		ns.tprint("killed running scripts for host.");
+	}
+
+	execMulti(ns, argHost, argThd, argScript, ...args);
+}
+
+export async function execMulti(ns, argHost, argThd, argScript, ...args) {
+	const host = argHost;
+	const script = expandPath(ns.getScriptName(), argScript);
+
+	const threads = (()=>{
+		const threadsArg = argThd;
+		
+		if (threadsArg !== 'max') {
+			if (typeof threadsArg !== 'number' || ! Number.isInteger(threadsArg)) {
+				ns.tprint("arg <threads> accepts a integer, got ", threadsArg);
+				ns.exit();
+			}
+
+			return threadsArg;
+		} else {
+			return getMaxThreads(ns, host, script);
+		}
+	})();
+
+	if (!ns.serverExists(host)) {
+		ns.tprint("host not exists: ", host);
+		ns.exit();
+	}
+
+	if (!ns.fileExists(script)) {
+		ns.tprint("file not exists: ", script);
+		ns.exit();
+	}
+
+	if (threads < 1) {
+		ns.tprint("threads not valid: ", threads);
+		ns.exit();
+	}
+
+	const scriptArgs = replaceArgs(args, {"$threads":threads});
+
+	ns.scp(script, host);
+	ns.exec(script, host, threads, ...scriptArgs);
+}
+
+
+================================================
+FILE: src/hack/bat/formulas.js
+================================================
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getHackPercent(ns, server, player) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.hackPercent(server, player);
+	} else {
+		return ns.hackAnalyze(server.hostname);
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getHackChance(ns, server, player) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.hackChance(server, player)
+	} else {
+		return ns.hackAnalyzeChance(server.hostname);
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getGrowThreads(ns, server, player, hackThd) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.growThreads(server, player, server.moneyMax);
+	} else {
+		const hackPercent = ns.hackAnalyze(server.hostname);
+		const hackMon = hackPercent * server.moneyAvailable * hackThd;
+		const monAfterHack = server.moneyAvailable - hackMon;
+		const multiplier = hackMon/(monAfterHack + 1) + 1;
+
+		return ns.growthAnalyze(server.hostname, multiplier);
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getWeakenTime(ns, server, player) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.weakenTime(server, player);
+	} else {
+		return ns.getWeakenTime(server.hostname);
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getHackTime(ns, server, player) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.hackTime(server, player);
+	} else {
+		return ns.getHackTime(server.hostname);
+	}
+}
+
+/** 
+ * @param {NS} ns 
+ * @param {Server} server
+ * @param {Person} player
+ */
+export function getGrowTime(ns, server, player) {
+	if (hasFormula(ns)) {
+		return ns.formulas.hacking.growTime(server, player);
+	} else {
+		return ns.getGrowTime(server.hostname);
+	}
+}
+
+/**
+ * @param {NS} ns 
+ */ 
+function hasFormula(ns) {
+	return ns.fileExists("/Formulas.exe");
+}
+
+
+================================================
+FILE: src/hack/bat/masterV3.js
+================================================
+import {chooseTargets} from "/hack/bat/select-server.js";
+import {getTargetHandler} from "/hack/bat/schedule.js";
+import {autoGrow, autoGrowSimple} from "/hack/bat/auto-grow.js";
+
+import * as config from "/hack/bat/config.js";
+
+/** @type {string} */
+const local = config.localGet();
+const stepTimeMillis = config.stepTimeMillisGet();
+const twoWeakenOpts = config.twoWeakenOptsGet();
+const preparationsLogFile = config.preparationsLogFileGet();
+const scriptBaseCost = config.scriptBaseCostGet();
+
+/** @type {string[]} */
+const servers = []; 
+const scanQueue = [local];
+
+const arrAdd = (arrA, arrB) => arrA.map((aEle, aInd) => aEle + arrB[aInd]);
+const arrMinus = (arrA, arrB) => arrA.map((aEle, aInd) => aEle - arrB[aInd]);
+
+/** @param {NS} ns */
+export async function main(ns) {
+	ns.disableLog("ALL");
+	// ns.disableLog("scp");
+	// ns.disableLog("getHackTime");
+	// ns.disableLog("hackAnalyze");
+	// ns.disableLog("hackAnalyzeChance");
+	// ns.disableLog("hasRootAccess");
+	// ns.disableLog("getServerMaxRam");
+	// ns.disableLog("sleep");
+	// ns.disableLog("getServerMoneyAvailable");
+	// ns.disableLog("scan");
+	// ns.disableLog("getPurchasedServers");
+	// ns.disableLog("getServerMaxMoney");
+	// ns.disableLog("exec");
+	// ns.disableLog("rm");
+	// ns.disableLog("getServerUsedRam");
+
+	const log = 
+		/**
+		 * @param {string} logStr
+		 */
+		(logStr, ...args)=>{
+			ns.write(preparationsLogFile, logStr+"\n");
+			ns.print(logStr);
+		};
+
+	//扫描所有服务器
+	while(scanQueue.length > 0) {
+		let host = scanQueue.pop();
+		if(servers.indexOf(host) === -1) {
+			servers.push(host);
+			scanQueue.push(...ns.scan(host));
+			// log(`[log] scan ${host} result: ${ns.scan(host)}`);
+		}
+	}
+
+	// log(`[log] Scaned Servers: ${servers}`);
+
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ TODO ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 将执行脚本换成函数调用 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	//复制脚本到所有服务器（删除并更新脚本）
+	for (let host of servers) {
+		while (ns.run("/tools/autonuke.js", 1, host) == 0) {
+			await ns.sleep(1);
+		}
+		if (ns.hasRootAccess(host)) {
+			ns.run("/tools/scp.js", 1, "-r", "/tools", "/lib", "/hack", host);
+		}
+	}
+
+	//整理可用资源
+	const availableServers = servers.filter((dest)=>{
+		let rooted = ns.hasRootAccess(dest);
+		let enoughRam = ns.getServerMaxRam(dest) >= scriptBaseCost;
+		return rooted && enoughRam;
+	});
+// log(`[log] Available Servers: ${availableServers}`);
+
+	await ns.sleep(100)
+
+	const availableRams = availableServers.map((server)=>(ns.getServerMaxRam(server) - ns.getServerUsedRam(server)));
+	const availableAllocs = availableRams.map((ram)=>Math.floor(ram/scriptBaseCost));
+	const availableTotalThreads = availableAllocs.reduce((prev, cur)=>prev+cur);
+	
+	log(`avai used:${availableServers.map(server=>server+":"+ns.getServerUsedRam(server))}`)
+	log(`avai rams:${availableRams}`);
+	log(`avai alloc:${availableAllocs}`);
+
+	//筛选可攻击的服务器
+	const targetCandidates = servers.filter((dest)=>{
+		let isPurchasedServer = ns.getPurchasedServers().indexOf(dest) !== -1;
+		let isHomeServer = dest===local;
+		let isNoMoney = ns.getServerMaxMoney(dest)===0;
+		let rooted = ns.hasRootAccess(dest);
+		return ! isPurchasedServer && ! isHomeServer && ! isNoMoney && rooted;
+	});
+	log(`targets: ${targetCandidates}`);
+
+	log("\n["+ new Date().toISOString() +"] 运行开始","w");
+
+	//如果没有Formula程序，在计算前需要先grow to max
+	if (!ns.fileExists("/Formulas.exe")) {
+		const needGrowCandidates = targetCandidates.filter(target=>{
+			const isMoneyMax = ns.getServerMoneyAvailable(target) === ns.getServerMaxMoney(target);
+			const isSecMin = ns.getServerSecurityLevel(target) === ns.getServerMinSecurityLevel(target);
+			return !isMoneyMax || !isSecMin;
+		})
+		await autoGrowSimple(ns, logStr=>{}, needGrowCandidates, availableServers);
+	}
+
+	/** 
+	 * @type {{dps:number, tpb:number
+	 *	hackServerAlloc:number[][], growServerAlloc:number[][], weaken1ServerAlloc:number[][], weaken2ServerAlloc:number[][], 
+	 *	concurrency:number, secondPerBatch:number, batchGap:number, 
+	 *	hackPerBatch:number, growPerBatch:number
+	 *	weaken1Time:number, weaken2Time:number, hackTime:number, growTime:number}[]}
+	 */
+	const resArr = await chooseTargets(ns, 
+			(logStr, ...args)=>{
+				if (logStr === 'INFO') {
+					log(args[0]);
+				}
+
+				// if (args.length > 0) {
+				// 	log(logStr + " " + args);
+				// } else {
+				// 	log(logStr);
+				// }
+			}, 
+			targetCandidates,
+			availableAllocs,
+			stepTimeMillis,
+			twoWeakenOpts);
+
+	for (let i in resArr) { 
+		if (resArr[i]===null) {
+			continue;
+		}
+		log(`h:${targetCandidates[i].padEnd(15)} hpb:${String(resArr[i].hackPerBatch).padEnd(4)} ` +
+			`tpb:${String(resArr[i].tpb).padEnd(4)} batch:${String(resArr[i].concurrency).padEnd(2)} ` +
+			`dps:${resArr[i].dps.toLocaleString()}"`);
+	}
+	log(`alloc total: ${availableAllocs.reduce((a,b)=>a+b)} left: ${
+		resArr.filter((res)=>res!==null)
+			.map(res=>
+				[res.hackServerAlloc.reduce(arrAdd),
+					res.growServerAlloc.reduce(arrAdd),
+					res.weaken1ServerAlloc.reduce(arrAdd),
+					res.weaken2ServerAlloc.reduce(arrAdd)]
+					.reduce(arrAdd)
+					.reduce((a,b)=>a+b)).reduce((a,b)=>a+b)
+	} total dps: ${resArr.filter((res)=>res!==null).map(res=>res.dps).reduce((a,b)=>a+b).toLocaleString()}`);
+	
+	let autoGrowFinishCheckers = [];
+	for (let i in resArr) {
+		if (resArr[i]===null) {
+			continue;
+		}
+		//auto-grow
+		let finishedChecker = await autoGrow(ns, log, 
+			targetCandidates[i],
+			resArr[i],
+			availableServers);
+		autoGrowFinishCheckers.push(finishedChecker);
+	}
+
+	let handleTargetFuncArr = [];
+	for (let i in resArr) {
+		if (resArr[i]===null) {
+			continue;
+		}
+		handleTargetFuncArr.push(await getTargetHandler(ns, logStr=>{}, 
+			targetCandidates[i],
+			resArr[i],
+			availableServers));
+	}
+
+	let autoGrowFinishedStates = autoGrowFinishCheckers.map((x)=>false);
+	//启动任务
+	while (true) {
+		await ns.sleep(1);
+		handleTargetFuncArr.forEach((func, i)=> {
+			if (!autoGrowFinishedStates[i]) {
+				let autoGrowFinished = autoGrowFinishCheckers[i]();
+				if (autoGrowFinished) {
+					autoGrowFinishedStates[i] = true;
+				}
+			} else {
+				func()
+			}
+		});
+	}
+}
+
+
+================================================
+FILE: src/hack/bat/readme.txt
+================================================
+Batch hack Runner
+
+
+================================================
+FILE: src/hack/bat/schedule.js
+================================================
+import * as config from "/hack/bat/config.js";
+import {execMulti} from "/hack/bat/exec-multi.js";
+import * as formu from "/hack/bat/formulas.js";
+
+const hackScript = config.hackScriptGet();
+const growScript = config.growScriptGet();
+const weaken1Script = config.weaken1ScriptGet();
+const weaken2Script = config.weaken2ScriptGet();
+const stepTimeMillis = config.stepTimeMillisGet();
+const scriptBaseCost = config.scriptBaseCostGet();
+
+/** 
+ * @param {NS} ns 
+ * @param {function(string):void} log logging function
+ * @param {string} target target server hostname
+ * @param {{dps:number, 
+		hackServerAlloc:number[][], growServerAlloc:number[][], weaken1ServerAlloc:number[][], weaken2ServerAlloc:number[][], 
+		concurrency:number, secondPerBatch:number, batchGap:number, 
+		hackPerBatch:number, growPerBatch:number
+		weaken1Time:number, weaken2Time:number, hackTime:number, growTime:number}} calcResult
+ * @param {string[]} availableServers
+ * @param {bool} twoWeakenOpts hack weaken grow weaken mode, if false, will use one weaken operation to counter the effects().
+ */
+export async function getTargetHandler(ns, log, target, calcResult, availableServers, twoWeakenOpts=true) {
+	const startTime = Date.now();
+	
+	//{number[][]} for batch allocations
+	let hackServers = calcResult.hackServerAlloc;
+	const growServers = calcResult.growServerAlloc;
+	const weaken1Servers = calcResult.weaken1ServerAlloc;
+	const weaken2Servers = calcResult.weaken2ServerAlloc;
+
+	let concurrency = calcResult.concurrency;
+	let hackPerBatch = calcResult.hackPerBatch;
+	const batchDuration = calcResult.secondPerBatch * 1000;
+	const batchGap = calcResult.batchGap;
+	
+	const finishMarkMillis = startTime + calcResult.weaken1Time - stepTimeMillis;
+
+	const serverOptimal = getServerOptimal(ns, target);
+
+	//打印执行信息
+	const hackStartTime = finishMarkMillis - calcResult.hackTime;
+	const weaken1StartTime = finishMarkMillis + stepTimeMillis - calcResult.weaken1Time;
+	const growStartTime = finishMarkMillis + 2 * stepTimeMillis - calcResult.growTime;
+	const weaken2StartTime = finishMarkMillis + 3 * stepTimeMillis - calcResult.weaken2Time;
+	log("weaken2: " + calcResult.weaken2Time);
+	log("weaken1: " + calcResult.weaken1Time);
+	log("grow: " + calcResult.growTime);
+	log("hack: " + calcResult.hackTime);
+	log("batchDuration: " + batchDuration);
+	const inSecond = milli=>Math.floor(milli)/1000;
+	log("batch0"
+		+"\tw1:"+weaken1Servers[0].reduce((a,b)=>a+b)+"\tw1ST:"+inSecond(weaken1StartTime - startTime)+"\tw1EA:"+inSecond(finishMarkMillis - startTime + stepTimeMillis)
+		+"\tw2:"+weaken2Servers[0].reduce((a,b)=>a+b)+"\tw2ST:"+inSecond(weaken2StartTime - startTime)+"\tw2EA:"+inSecond(finishMarkMillis - startTime + 3 * stepTimeMillis)
+		+"\t g:"+growServers[0].reduce((a,b)=>a+b)+"\t gST:"+inSecond(growStartTime - startTime)+"\t gEA:"+inSecond(finishMarkMillis - startTime + 2 * stepTimeMillis)
+		+"\t h:"+hackServers[0].reduce((a,b)=>a+b)+"\t hST:"+inSecond(hackStartTime - startTime)+"\t hEA:"+inSecond(finishMarkMillis - startTime)
+	);
+
+	/**
+	 * @param {number[]} alloc
+	 * @param {number} i
+	 * @param {string} script
+	 */
+	function execute(alloc, batch, script, execTimeGetter) {
+		const execTime = execTimeGetter();
+		let logContent = script.substring(script.lastIndexOf("/")+1, script.lastIndexOf(".js"));
+		logContent = logContent + "\tST: " + inSecond(Date.now()-startTime);
+		alloc[batch].forEach((threads, serverIndex)=>{
+			if (threads > 0) {
+				const worker = availableServers[serverIndex];
+				execMulti(ns, worker, threads, script, target, "$threads");
+			}
+		});
+		logContent = logContent + "\tRF : " + inSecond(execTime);
+		log(logContent);
+	}
+
+	const weaken1Func = i=>execute(weaken1Servers, i, weaken1Script, ()=>formu.getWeakenTime(ns, serverOptimal, ns.getPlayer()));
+	const weaken2Func = i=>execute(weaken2Servers, i, weaken2Script, ()=>formu.getWeakenTime(ns, serverOptimal, ns.getPlayer()));
+	const growFunc = i=>execute(growServers, i, growScript, ()=>formu.getGrowTime(ns, serverOptimal, ns.getPlayer()));
+	const hackFunc = i=>execute(hackServers, i, hackScript, ()=>formu.getHackTime(ns, serverOptimal, ns.getPlayer()));
+
+	//{ExecutionManager[]} same action of all batch 
+	const weaken1Managers = [];
+	const weaken2Managers = [];
+	const growManagers = [];
+	const hackManagers = [];
+
+	for (let i=0; i<concurrency; ++i) {
+		hackManagers.push(new ExecutionManager(
+			finishMarkMillis + stepTimeMillis * 0 + batchGap * i, 
+			batchDuration, 
+			calcResult.hackTime, 
+			()=>hackFunc(i)));
+
+		weaken1Managers.push(new ExecutionManager(
+			finishMarkMillis + stepTimeMillis * 1 + batchGap * i, 
+			batchDuration, 
+			calcResult.weaken1Time, 
+			()=>weaken1Func(i)));
+
+		growManagers.push(new ExecutionManager(
+			finishMarkMillis + stepTimeMillis * 2 + batchGap * i, 
+			batchDuration, 
+			calcResult.growTime, 
+			()=>growFunc(i)));
+
+		weaken2Managers.push(new ExecutionManager(
+			finishMarkMillis + stepTimeMillis * 3 + batchGap * i, 
+			batchDuration, 
+			calcResult.weaken2Time, 
+			()=>weaken2Func(i)));
+	}
+
+	let lastHackLevel = ns.getHackingLevel();
+	let lastLog="";
+	let m=ns.getServerMoneyAvailable(target);
+	let s=ns.getServerSecurityLevel(target);
+
+	const correctExecTime = ()=>{
+		if (ns.getHackingLevel() != lastHackLevel) {
+			const newWeakenTime = formu.getWeakenTime(ns, serverOptimal, ns.getPlayer());
+			const newGrowTime = formu.getGrowTime(ns, serverOptimal, ns.getPlayer());
+			const newHackTime = formu.getHackTime(ns, serverOptimal, ns.getPlayer());
+
+			log("level up happened, new time: ");
+			log("weaken: " + newWeakenTime);
+			log("grow: " + newGrowTime);
+			log("hack: " + newHackTime);
+
+			let oldConcurrency = concurrency;
+
+			//If no enough hackTime, fire some managers
+			while (Math.floor(newHackTime/batchGap + 1) < concurrency) {
+				weaken1Managers[concurrency-1].fire();
+				weaken2Managers[concurrency-1].fire();
+				growManagers[concurrency-1].fire();
+				hackManagers[concurrency-1].fire();
+				concurrency--;
+			}
+
+			log("new concurrency: " + concurrency + " (old: "+oldConcurrency+" )");
+
+			//If new growth cannot cover new hack money, decrease hack
+			const newGrowPerBatchNeeded = hpb=>{
+				const newDph = serverOptimal.moneyAvailable * formu.getHackPercent(ns, serverOptimal, ns.getPlayer());
+				const serverBeforeGrow = getServerOptimal(ns, target);
+				serverBeforeGrow.moneyAvailable = serverBeforeGrow.moneyMax - newDph * hpb;
+				return Math.ceil(formu.getGrowThreads(ns, serverBeforeGrow, ns.getPlayer(), hpb));
+			};
+			let newHpb = hackPerBatch;
+			while(newGrowPerBatchNeeded(newHpb) > calcResult.growPerBatch) {
+				newHpb--;
+			}
+			const oldHpb = hackPerBatch;
+			if (newHpb !== hackPerBatch) {
+				hackServers = hackServers.map(allocMap=>{
+					return allocMap.map(serverAlloc=>{
+						if (serverAlloc === 0) {
+							return 0;
+						} else {
+							return newHpb;
+						}
+					});
+				});
+				hackPerBatch = newHpb;
+			}
+
+			log("new hackPerBatch: " + hackPerBatch + " (old: "+oldHpb+" )");
+
+			//Tell the rest managers the new execute plan
+			for (let i=0; i<concurrency; ++i) {
+				weaken1Managers[i].changeExecuteTime(newWeakenTime);
+				weaken2Managers[i].changeExecuteTime(newWeakenTime);
+				growManagers[i].changeExecuteTime(newGrowTime);
+				hackManagers[i].changeExecuteTime(newHackTime);
+			}
+			lastHackLevel = ns.getHackingLevel();
+		}
+	};
+
+	return ()=>{
+		//print stats changes
+		m=ns.getServerMoneyAvailable(target);
+		s=ns.getServerSecurityLevel(target);
+		let curLog = "m: "+Math.floor(m) + " s: "+s.toFixed(4);
+		if (curLog !== lastLog) {
+		  let delT=Math.floor(Date.now()-startTime)/1000;
+			log(delT+"\t"+curLog);
+			lastLog = curLog;
+		}
+
+		//managers react 
+		for (let i=0; i<concurrency; ++i) {
+			weaken1Managers[i].react();
+			correctExecTime();
+			weaken2Managers[i].react();
+			correctExecTime();
+			growManagers[i].react();
+			correctExecTime();
+			hackManagers[i].react();
+			correctExecTime();
+		}
+	}
+}
+
+/** 
+ * @param {NS} ns
+ * @param {string} dest
+ */
+function getServerOptimal(ns, dest) {
+	const server = ns.getServer(dest);
+	server.moneyAvailable = server.moneyMax;
+	server.hackDifficulty = server.minDifficulty;
+	return server;
+}
+
+class ExecutionManager {
+	/**
+	 * @param {number} targetTimeFirst Timestamp where first execution finish. In millis.
+	 * @param {number} targetTimeEvery Time between every execution finish. In millis.
+	 * @param {number} executeTime Time of every execution needed. In millis.
+	 * @param {function} doExecute Execution function.
+	 */
+	constructor(targetTimeFirst, targetTimeEvery, executeTime, doExecute) {
+		this.targetTimeFirst = targetTimeFirst;
+		this.targetTimeEvery = targetTimeEvery;
+		this.executeTime = executeTime;
+		this.doExecute = doExecute;
+		this.employed = true;
+
+		this.executed = 0;
+	}
+
+	react() {
+		if (!this.employed) {
+			return;
+		}
+
+		const now = Date.now();
+		const nextExecute = this.targetTimeFirst + this.targetTimeEvery * this.executed - this.executeTime;
+		if (now >= nextExecute) {
+			this.doExecute();
+			this.executed++;
+		}
+	}
+
+	/** 
+	 * @param {number} executeTime Time of every execution needed. In millis.
+	 */
+	changeExecuteTime(executeTime) {
+		this.executeTime = executeTime;
+	}
+
+	fire() {
+		this.employed = false;
+	}
+}
+
+
+================================================
+FILE: src/hack/bat/select-server.js
+================================================
+import Allocator from "/hack/bat/allocator.js";
+
+import * as formu from "/hack/bat/formulas.js";
+import * as config from "/hack/bat/config.js";
+
+const local = config.localGet();
+const stepTimeMillis = config.stepTimeMillisGet();
+const twoWeakenOpts = config.twoWeakenOptsGet();
+const preparationsLogFile = config.preparationsLogFileGet();
+const scriptBaseCost = config.scriptBaseCostGet();
+const maxConcurrency = config.maxConcurrencyGet();
+const maxHackPerBatch = config.maxHackPerBatchGet();
+
+const arrAdd = (arrA, arrB) => arrA.map((aEle, aInd) => aEle + arrB[aInd]);
+const arrMinus = (arrA, arrB) => arrA.map((aEle, aInd) => aEle - arrB[aInd]);
+
+/** 
+ * Incrementally find the best paramters.
+ * 
+ * d: dollar
+ * h: hack
+ * t: thread
+ * s: second
+ * g: grow
+ * 
+ * XpY: X per Y
+ * 
+ * @param {NS} ns
+ * @param {function(string):void} log logging function
+ * @param {string[]} dest dest hostnames
+ * @param {number[]} availableAllocs
+ * @param {number} stepMillis step time in millis, used for adding gap between effects to avoid failures.
+ * @param {bool} hwgw hack weaken grow weaken mode, if false, will use one weaken operation to counter the effects().
+ */ 
+export async function chooseTargets(ns, log, dests, availableAllocs, stepMillis, hwgw=true) {
+	if (!hwgw) {
+		log("hgw mode not implemented.");
+		ns.tprint("hgw mode not implemented.");
+		ns.exit();
+	}
+
+	let remainAllocs = availableAllocs.slice();
+
+	const totalAllocNumber = remainAllocs.reduce((a,b)=>a+b);
+	let nextAllocPercent = 0;
+
+	const targetParams = [];
+	const targetHpb = [];
+	const targetLastThread = [];
+	const targetLastDps = [];
+
+	//init
+	for (let i in dests) {
+		targetParams.push(null);
+		targetHpb.push(0);
+		targetLastThread.push(0);
+		targetLastDps.push(0); 
+	}
+	
+	log(`remainAllocs ${remainAllocs}`);
+	while (true) {
+		await ns.sleep(1);
+		let maxIncDpsPT = 0;
+		let maxIncDpsPTIndex = -1;
+		let maxIncDpsPTServerParam;
+		let maxIncDpsPTServerOriginalAllocMap;
+
+		//find next best investment
+		for (let i in dests) {
+			await ns.sleep(1);
+			const dest = dests[i];
+			
+			log(` begin to cal ${i}:${dest}, lastHpb ${targetHpb[i]}`);
+			// first return allocated threads, then do the calculation again
+			let returnedRemainAllocs;
+			let totalAllocMap;
+			if (targetParams[i] == null) {
+				returnedRemainAllocs = remainAllocs;
+				totalAllocMap = remainAllocs.map(()=>0);
+			} else {
+				const hackAllocMap = targetParams[i].hackServerAlloc.reduce(arrAdd);
+				const growAllocMap = targetParams[i].growServerAlloc.reduce(arrAdd);
+				const weaken1AllocMap = targetParams[i].weaken1ServerAlloc.reduce(arrAdd);
+				const weaken2AllocMap = targetParams[i].weaken2ServerAlloc.reduce(arrAdd);
+				totalAllocMap = [hackAllocMap, growAllocMap, weaken1AllocMap, weaken2AllocMap].reduce(arrAdd);
+				returnedRemainAllocs = arrAdd(remainAllocs, totalAllocMap);
+			  // log(`  last alloc: ${totalAllocMap}`);
+			}
+			// log(`  remain alloc: ${remainAllocs}`);
+			// log(`  remain alloc(returned): ${returnedRemainAllocs}`);
+			
+			if (formu.getHackChance(ns, ns.getServer(dest), ns.getPlayer()) < 1) { 
+				// log("h " +dest+ " hacking chance is not 100%, skipping.");
+				continue;
+			}
+			if (maxHackPerBatch > 0 && targetHpb[i]+1 > maxHackPerBatch) {
+				continue;
+			}
+			
+			/** 
+		 	 *	@type {{dps:number, tpb:number
+			 *	hackServerAlloc:number[][], growServerAlloc:number[][], weaken1ServerAlloc:number[][], weaken2ServerAlloc:number[][], 
+			 *	concurrency:number, secondPerBatch:number, batchGap:number, 
+			 *	hackPerBatch:number, growPerBatch:number
+			 *	weaken1Time:number, weaken2Time:number, hackTime:number, growTime:number}}
+			 */
+			const calRes = await calDps(ns, logStr=>log('   '+logStr), dest, targetHpb[i]+1, returnedRemainAllocs, stepMillis, hwgw);
+			log(` dps:${calRes.dps} dpb:${calRes.hackPerBatch}`);
+			// //Stop when required threads exceeds availables
+			// if (calRes.concurrency === 0) {
+			// 	log("server " +dest+ " cannot meet algorithm constraints.");
+			// 	continue;
+			// }
+			// log("h: "+dest+"\t"
+			// 	+"dph: "+dph+"\t"
+			// 	+"hpb: "+hpb+"\t"
+			// 	+"gpb: "+gpb+"\t"
+			// 	+"tpb: "+tpb+"\t"
+			// 	+"spb: "+spb+"\t"
+			// 	+"con: "+concurrency+"\t"
+			// 	+"$/s: "+dps+"\t"
+			// );
+
+			const totalThreads = calRes.tpb * calRes.concurrency;
+			const totalDps = calRes.dps;
+			if (totalDps === 0) {
+				continue;
+			}
+
+			const incThreads = totalThreads - targetLastThread[i];
+			const incDps = totalDps - targetLastDps[i];
+
+			const incDpsPerThread = incDps / incThreads;
+			if (incDpsPerThread > maxIncDpsPT) {
+				// log(` found better investment i:${i}:${dests[i]}, incDps:${incDps}, incThds:${incThreads}`);
+				maxIncDpsPT = incDpsPerThread;
+				maxIncDpsPTIndex = i;
+				maxIncDpsPTServerParam = calRes;
+				maxIncDpsPTServerOriginalAllocMap = totalAllocMap;
+			}
+		}
+
+		if (maxIncDpsPT <= 0) {
+			break;
+		} 
+		
+		let i = maxIncDpsPTIndex;
+		// log(`choose to invest i:${i}:${dests[i]}, maxIncDpsPT:${maxIncDpsPT}`);
+
+		//reduce resources
+		const nextHackAllocMap = maxIncDpsPTServerParam.hackServerAlloc.reduce(arrAdd);
+		const nextGrowAllocMap = maxIncDpsPTServerParam.growServerAlloc.reduce(arrAdd);
+		const nextWeaken1AllocMap = maxIncDpsPTServerParam.weaken1ServerAlloc.reduce(arrAdd);
+		const nextWeaken2AllocMap = maxIncDpsPTServerParam.weaken2ServerAlloc.reduce(arrAdd);
+		const nextTotalAllocMap = [nextHackAllocMap, nextGrowAllocMap, nextWeaken1AllocMap, nextWeaken2AllocMap].reduce(arrAdd);
+		
+		remainAllocs = arrAdd(remainAllocs, maxIncDpsPTServerOriginalAllocMap);
+		remainAllocs = arrMinus(remainAllocs, nextTotalAllocMap);
+
+		//write new params
+		targetParams[maxIncDpsPTIndex] = maxIncDpsPTServerParam;
+		targetHpb[maxIncDpsPTIndex] = maxIncDpsPTServerParam.hackPerBatch;
+		targetLastThread[maxIncDpsPTIndex] = maxIncDpsPTServerParam.tpb * maxIncDpsPTServerParam.concurrency;
+		targetLastDps[maxIncDpsPTIndex] = maxIncDpsPTServerParam.dps;
+		log(`investing i:${i}:${dests[i]} hpb:${targetHpb[i]} thd:${targetLastThread[i]} dps:${targetLastDps[i]}`);
+		
+		const remainAllocNumber = remainAllocs.reduce((a,b)=>a+b);
+		const allocPercent = (1 - remainAllocNumber / totalAllocNumber) * 100;
+		if ((1 - remainAllocNumber / totalAllocNumber) * 100 > nextAllocPercent) {
+			log('INFO', `${new Date().toString()} percent ${allocPercent}% total ${totalAllocNumber} left ${remainAllocNumber} `);
+			nextAllocPercent += 10;
+		}
+	}
+
+	return targetParams;
+}
+
+/** 
+ * Incrementally find the best paramters.
+ * 
+ * d: dollar
+ * h: hack
+ * t: thread
+ * s: second
+ * g: grow
+ * 
+ * XpY: X per Y
+ * 
+ * @param {NS} ns
+ * @param {function(string):void} log logging function
+ * @param {string} dest dest hostname
+ * @param {number} hpb hack per batch
+ * @param {number[]} availableAllocs
+ * @param {number} stepMillis step time in millis, used for adding gap between effects to avoid failures.
+ * @param {bool} hwgw hack weaken grow weaken mode, if false, will use one weaken operation to counter the effects().
+ */
+async function calDps(ns, log, dest, hpb, availableAllocs, stepMillis, hwgw=true) {
+	const serverOptimal = getServerOptimal(ns, dest);
+
+	const weaken2Time = formu.getWeakenTime(ns, serverOptimal, ns.getPlayer());
+	const weaken1Time = formu.getWeakenTime(ns, serverOptimal, ns.getPlayer());
+	const hackTime = formu.getHackTime(ns, serverOptimal, ns.getPlayer());
+	const growTime = formu.getGrowTime(ns, serverOptimal, ns.getPlayer());
+
+	const batchGap = stepMillis * 4;
+	const dph = serverOptimal.moneyAvailable * formu.getHackPercent(ns, serverOptimal, ns.getPlayer());
+	//如果开始执行时间和其他批次的执行结束时间重叠，会导致结果无法预测
+	//在有更优解决办法之前，先将最大批次限制为hackTime（HWGW中时间最短的那个）可以容纳的作用时间段数
+	const maxBatch = maxConcurrency >0? 
+		Math.min(maxConcurrency, Math.floor(hackTime / batchGap + 1)) 
+		: Math.floor(hackTime / batchGap + 1);
+
+	let tpb = 0;
+	let dps = 0;
+	let spb = 0;
+	let gpb = 0;
+	let concurrency = 0;
+
+	//{number[][]} for batch allocations
+	let hackServerAlloc = [];
+	let growServerAlloc = [];
+	let weaken1ServerAlloc = [];
+	let weaken2ServerAlloc = [];
+	
+	const curDpb = Math.min(serverOptimal.moneyMax, dph * hpb);
+	const serverBeforeGrow = getServerOptimal(ns, dest);
+	serverBeforeGrow.moneyAvailable = serverBeforeGrow.moneyMax - curDpb;
+
+	const hackThreadsRaw = hpb;
+	const growThreadsRaw = formu.getGrowThreads(ns, serverBeforeGrow, ns.getPlayer(), hpb);
+	const weaken1ThreadsRaw = hackThreadsRaw * 0.002 / 0.05;
+	const weaken2ThreadsRaw = growThreadsRaw * 0.004 / 0.05;
+
+	//{number[][]} for batch allocations
+	const curHackServerAlloc = [];
+	const curGrowServerAlloc = [];
+	const curWeaken1ServerAlloc = [];
+	const curWeaken2ServerAlloc = [];
+
+	const allocator = new Allocator(availableAllocs);
+
+	let batch = 0;
+
+	//先分配hack、再分配grow，每次要求完整分配
+	//weaken可以碎片分配
+	while (batch < maxBatch) {
+		await ns.sleep(1);
+		const hackAllocRes = allocator.alloc(Math.ceil(hackThreadsRaw), false);
+		if (!hackAllocRes.success) {
+			break;
+		}
+		curHackServerAlloc.push(hackAllocRes.allocation);
+
+		const growAllocRes = allocator.alloc(Math.ceil(growThreadsRaw), false);
+		if (!growAllocRes.success) {
+			allocator.free(curHackServerAlloc.pop());
+			break;
+		}
+		curGrowServerAlloc.push(growAllocRes.allocation);
+
+		const weaken1AllocRes = allocator.alloc(Math.ceil(weaken1ThreadsRaw), true);
+		if (!weaken1AllocRes.success) {
+			allocator.free(curHackServerAlloc.pop());
+			allocator.free(curGrowServerAlloc.pop());
+			break;
+		}
+		curWeaken1ServerAlloc.push(weaken1AllocRes.allocation);
+
+		const weaken2AllocRes = allocator.alloc(Math.ceil(weaken2ThreadsRaw), true);
+		if (!weaken2AllocRes.success) {
+			allocator.free(curHackServerAlloc.pop());
+			allocator.free(curGrowServerAlloc.pop());
+			allocator.free(curWeaken1ServerAlloc.pop());
+			break;
+		}
+		curWeaken2ServerAlloc.push(weaken2AllocRes.allocation);
+
+		batch++;
+		log(`batch ${batch} alloced, cur total thd ${
+			[curHackServerAlloc.reduce(arrAdd),
+				curGrowServerAlloc.reduce(arrAdd),
+				curWeaken1ServerAlloc.reduce(arrAdd),
+				curWeaken2ServerAlloc.reduce(arrAdd)].reduce(arrAdd).reduce((a,b)=>a+b)
+		} cur thd left ${allocator.availableAllocs.reduce((a,b)=>a+b)}`);
+	}
+
+	let curSpb = (weaken1Time + batch * batchGap) / 1000;
+	const curDps = curDpb * (1 / curSpb) * batch;
+
+	if (dps < curDps) {
+		tpb = Math.ceil(hackThreadsRaw) 
+			+ Math.ceil(growThreadsRaw) 
+			+ Math.ceil(weaken1ThreadsRaw) 
+			+ Math.ceil(weaken2ThreadsRaw);
+		spb = curSpb;
+		dps = curDps;
+		gpb = Math.ceil(growThreadsRaw);
+
+		concurrency = batch;
+
+		hackServerAlloc = curHackServerAlloc;
+		growServerAlloc = curGrowServerAlloc;
+		weaken1ServerAlloc = curWeaken1ServerAlloc;
+		weaken2ServerAlloc = curWeaken2ServerAlloc;
+	}
+
+	return {dps, tpb,
+		hackServerAlloc, growServerAlloc, weaken1ServerAlloc, weaken2ServerAlloc, 
+		concurrency, secondPerBatch: spb, batchGap, 
+		hackPerBatch: hpb, growPerBatch: gpb,
+		weaken1Time, weaken2Time, hackTime, growTime};
+}
+
+/** 
+ * @param {NS} ns
+ * @param {string} dest
+ */
+function getServerOptimal(ns, dest) {
+	const server = ns.getServer(dest);
+	server.moneyAvailable = server.moneyMax;
+	server.hackDifficulty = server.minDifficulty;
+	return server;
+}
+
+
+================================================
+FILE: src/hack/bat/action/do-grow.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	await ns.grow(ns.args[0], {threads:ns.args[1]});
+}
+
+
+================================================
+FILE: src/hack/bat/action/do-hack.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	await ns.hack(ns.args[0], {threads:ns.args[1]});
+}
+
+
+================================================
+FILE: src/hack/bat/action/do-weaken1.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	await ns.weaken(ns.args[0], {threads:ns.args[1]});
+}
+
+
+================================================
+FILE: src/hack/bat/action/do-weaken2.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	await ns.weaken(ns.args[0], {threads:ns.args[1]});
+}
+
+
+================================================
+FILE: src/hack/bat/prepare/grow.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	let target = ns.args[0];
+	let threads = ns.args[1] || 1;
+
+	while (ns.getServerMaxMoney(target) !== ns.getServerMoneyAvailable(target)) {
+		if(ns.getServerSecurityLevel(target) - ns.getServerMinSecurityLevel(target) > 0.05*threads
+			|| ns.getServerSecurityLevel(target) - ns.getServerMinSecurityLevel(target) > 20) {
+			await ns.weaken(target, {threads:threads});
+		}
+		await ns.grow(target, {threads:threads});
+	}
+
+	while (ns.getServerSecurityLevel(target) !== ns.getServerMinSecurityLevel(target)) {
+		await ns.weaken(target, {threads:threads});
+	}
+}
+
+
+================================================
+FILE: src/hack/sc/exec-multi.js
+================================================
+import {getMaxThreads} from "/lib/calculations.js";
+import {replaceArgs} from "/lib/arguments.js";
+import {expandPath} from "/lib/files.js";
+
+/** @param {NS} ns */
+export async function main(ns) {
+	ns.tprint("\n");
+	if (ns.args.length < 3) {
+		ns.tprint("usage: run exec-muti.js <host> <threads> <script> [ <args>... ]\n", 
+			"Where threads is an int or the string 'max', default to 'max'.\n",
+			"This script is designed to run on home machine.\n");
+		ns.exit();
+	}
+
+	const host = ns.args[0]
+	const script = expandPath(ns.getScriptName(), ns.args[2]);
+
+	if (ns.scriptRunning(script, host)) {
+		ns.scriptKill(script, host);
+		ns.tprint("killed running scripts for host.");
+	}
+
+	const threads = (()=>{
+		const threadsArg = ns.args[1];
+		
+		if (threadsArg !== 'max') {
+			if (typeof threadsArg !== 'number' || ! Number.isInteger(threadsArg)) {
+				ns.tprint("arg <threads> accepts a integer, got ", threadsArg);
+				ns.exit();
+			}
+
+			return threadsArg;
+		} else {
+			return getMaxThreads(ns, host, script);
+		}
+	})();
+
+	if (!ns.serverExists(host)) {
+		ns.tprint("host not exists: ", host);
+		ns.exit();
+	}
+
+	if (!ns.fileExists(script)) {
+		ns.tprint("file not exists: ", script);
+		ns.exit();
+	}
+
+	if (threads < 1) {
+		ns.tprint("threads not valid: ", threads);
+		ns.exit();
+	}
+
+	const scriptArgs = replaceArgs(ns.args.slice(3), {"$threads":threads});
+
+	ns.scp(script, host);
+	ns.exec(script, host, threads, scriptArgs|undefined);
+
+	ns.tprint("Execution started.");
+}
+
+
+================================================
+FILE: src/hack/sc/hack-loop.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	ns.disableLog("ALL");
+	const tCount = ns.args[0];
+	const host = ns.args[1] || ns.getHostname();
+
+	const minSec=ns.getServerMinSecurityLevel(host);
+	const maxMon=ns.getServerMaxMoney(host);
+
+	const maxWeakenAmount = ns.weakenAnalyze(tCount);
+	let maxGrowth = 0;
+	let maxHack = 0;
+
+	let unmendHacked = 0;
+	while(true) {
+		const curSec=ns.getServerSecurityLevel(host);
+		const curMon=Math.floor(ns.getServerMoneyAvailable(host));
+		const canGrowth=(maxMon-curMon)/curMon+1;
+
+		//decide action
+		let action;
+		if (curSec-minSec >= maxWeakenAmount) {
+			action='weaken';
+		} else {
+			if (canGrowth >= maxGrowth && unmendHacked >= 0) {
+				action='grow';
+			} else if (curMon >= maxHack){
+				action='hack';
+			} else {
+				action='grow';
+			}
+		}
+
+		ns.print("minSec: ", minSec
+			," curSec: ", curSec, "\t"
+			," maxMon: ", maxMon
+			," curMon: ", curMon, "\t"
+			," maxWek: ", maxWeakenAmount
+			," maxGrw: ", maxGrowth
+			," hakGrw: ", unmendHacked, "\t"
+			," action: ", action
+			," thread: ", tCount
+		);
+
+		//do action
+		const effect = await doAction(ns, host, tCount, action);
+
+		if (action==='hack' && maxHack < effect) {
+			maxHack=effect;
+		}
+
+		//keep track of hack-grow difference
+		if (action==='hack') {
+			unmendHacked += Math.floor(effect);
+		}
+		if (action==='grow') {
+			const newMon = ns.getServerMoneyAvailable(host);
+			const oriMon = newMon/effect;
+			unmendHacked -= Math.floor(newMon-oriMon);
+		
+			if (effect > maxGrowth) {
+				maxGrowth = effect;
+			}
+		}
+	}
+}
+/** @param {NS} ns */
+export function doAction(ns, host, tCount, action) {
+	switch(action) {
+		case 'weaken': 
+			return ns.weaken(host, {threads :tCount}); 
+		case 'grow': 
+			return ns.grow(host, {threads :tCount});
+		case 'hack': 
+			return ns.hack(host, {threads :tCount});
+	}
+}
+
+
+================================================
+FILE: src/hack/sc/viral-exec.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	doHost(ns, "home");
+}
+
+/** @param {NS} ns */
+function doHost(ns, host, parent=undefined) {
+	const hosts=ns.scan(host);
+
+	for (let i in hosts) {
+		const tarHost = hosts[i];
+		if (tarHost===parent) {
+			continue;
+		}
+
+		ns.run("/tools/autonuke.js", 1, tarHost);
+		if (ns.hasRootAccess(tarHost)) {
+			ns.run("/tools/scp.js", 1, "-r", "/tools", "/lib", "/hack", tarHost);
+			ns.run("/hack/sc/exec-multi.js", 1, tarHost, "max", "/hack/sc/hack-loop.js", "$threads");
+			doHost(ns, tarHost, host);
+		}
+	}
+}
+
+
+================================================
+FILE: src/lib/arguments.js
+================================================
+/** 
+ * Replace variables with calculated values.
+ * @param {(string | number | boolean)[]} args  
+ * @param {{[ holder : string] : (string | number | boolean);}} replacer
+ * @return replaced args
+ */
+export function replaceArgs(args, replacer) {
+	return args.map(val=> {
+		if(typeof replacer[val] !== 'undefined') {
+			return replacer[val];
+		} else {
+			return val;
+		}
+	});
+}
+
+export function withFlag(arg, flag) {
+	return arg.startsWith('-') && arg.indexOf(flag) > -1;
+}
+
+
+================================================
+FILE: src/lib/calculations.js
+================================================
+/** @param {NS} ns */
+export function getMaxThreads(ns, host, script) {
+	const scriptRam = ns.getScriptRam(script);
+	const maxRam = ns.getServerMaxRam(host);
+	const usedRam = ns.getServerUsedRam(host);
+
+	return Math.floor((maxRam - usedRam)/scriptRam);
+}
+
+
+================================================
+FILE: src/lib/files.js
+================================================
+/** @param {NS} ns 
+ *  @param {string} path
+ */
+export function isFolder(ns, path) {
+	if (ns.fileExists(path)) {
+		return false;
+	} else {
+		const lsList = ns.ls(ns.getHostname(), path);
+		ns.print("checking is folder: ", path, " listing: ", lsList);
+		for (let idx in lsList) {
+			if (lsList[idx].startsWith(endWithSlash(path))) {
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+/** @param {NS} ns */
+export function fileOrFolderExist(ns, path) {
+	return ns.fileExists(path) || isFolder(ns, path);
+}
+
+/** @param {string} path */
+export function formatAbsolutePath(path, withLeadingSlash=true) {
+	if (withLeadingSlash) {
+		return path.startsWith("/")? path : "/" + path;
+	} else {
+		return path.startsWith("/")? path.substring(1) : path;
+	}
+}
+
+/**  @param {string} path */
+export function endWithSlash(path, endsWith=true) {
+	if (endsWith) {
+		return path.endsWith("/")? path : path + "/";
+	} else {
+		return path.endsWith("/")? path.substring(0, path.length-1) : path;
+	}
+}
+
+export function expandPath(curScriptPath, path) {
+	if (!path.startsWith(".")) {
+		return path;
+	}
+
+	if (path.startsWith(".") && !path.startsWith("..")) {
+		return curScriptPath.substring(0, curScriptPath.lastIndexOf("/")) + path.substring(1);
+	}
+
+	let tmpPath=path;
+	let tmpCurPath=curScriptPath.substring(0, curScriptPath.lastIndexOf("/"));
+	while (tmpPath.startsWith("../")) {
+		tmpPath=tmpPath.substring(3);
+		tmpCurPath=tmpCurPath.substring(0, tmpCurPath.lastIndexOf("/"));
+	}
+	return tmpCurPath + "/" + tmpPath;
+}
+
+/** @param {NS} ns */
+export function lsPath(ns, path) {
+	const prefix = formatAbsolutePath(endWithSlash(path), false);
+	return ns.ls(ns.getHostname(), prefix)
+		.filter((path)=>path.startsWith(prefix));
+}
+
+
+================================================
+FILE: src/lib/react.ts
+================================================
+import ReactNamespace from 'react/index';
+import ReactDomNamespace from 'react-dom';
+
+const React = window.React as typeof ReactNamespace;
+const ReactDOM = window.ReactDOM as typeof ReactDomNamespace;
+
+export default React;
+export {
+  ReactDOM
+}
+
+
+================================================
+FILE: src/ownserver/add.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const owned = ns.getPurchasedServers();
+
+	while (owned.length < ns.getPurchasedServerLimit()) {
+		await ns.sleep(1);
+		let name = 'h'+owned.length;
+		owned.push(ns.purchaseServer(name, 8));
+		ns.tprint(owned.length);
+	}
+
+	let budget = 500 * 1000 * 1000 * 1000;
+	
+}
+
+
+================================================
+FILE: src/ownserver/getUpgradeCost.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const targetRam=ns.args[0];
+	const host=ns.args[1] || ns.getPurchasedServers()[0];
+	ns.tprint(ns.getPurchasedServerUpgradeCost(host,targetRam));
+}
+
+
+================================================
+FILE: src/ownserver/printLimit.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	ns.tprint(ns.getPurchasedServerLimit());
+}
+
+
+================================================
+FILE: src/ownserver/show.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const owned = ns.getPurchasedServers();
+	for (let i in owned) {
+		const server = ns.getServer(owned[i]);
+		ns.tprint(server.hostname, "\t", server.maxRam);
+	}
+}
+
+
+================================================
+FILE: src/ownserver/upgrade.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const owned = ns.getPurchasedServers();
+	const targetRam = ns.args[0];
+
+	for (let i in owned) {
+		ns.tprint(ns.upgradePurchasedServer(owned[i], targetRam));
+	}
+}
+
+
+================================================
+FILE: src/tools/autonuke.js
+================================================
+/** @param {NS} ns */
+export async function main(ns) {
+	const host = ns.args[0];
+	if(!ns.serverExists(host)) {
+		ns.tprint("server not exist: ", host);
+		ns.exit();
+	}
+
+	const ports = ns.getServerNumPortsRequired(host);
+	const means = [ns.brutessh, ns.ftpcrack, ns.relaysmtp, ns.httpworm, ns.sqlinject];
+	const files = ["/BruteSSH.exe", "/FTPCrack.exe", "/relaySMTP.exe", "/HTTPWorm.exe", "/SQLInject.exe"];
+
+	// ns.tprint(`nuking ${host}, ports: ${ports}`)
+	for (let i=0; i<ports; ++i) {
+		if (!ns.fileExists(files[i])) {
+			ns.tprint("Required file not exist: ", files[i]);
+			ns.exit();
+		}
+
+		means[i](host);
+	}
+
+	ns.nuke(host);
+	// ns.tprint("Nuke succeeded on ", host);
+}
+
+
+================================================
+FILE: src/tools/mv.js
+================================================
+import {isFolder, fileOrFolderExist, formatAbsolutePath, endWithSlash} from "/lib/files.js";
+
+/** @param {NS} ns */
+export async function main(ns) {
+	// All paths have to be converted to absolute paths;
+	const src = formatAbsolutePath(ns.args[0], false);
+	const dest = formatAbsolutePath(ns.args[1], false);
+
+	if (!fileOrFolderExist(ns, src)) {
+		ns.tprint("src not exist: ", src);
+		ns.exit();
+	}
+	
+	let mvFunc;
+	//If src is folder, need to list all src files, and then move each one to new location
+	if (isFolder(ns, src)) {
+		mvFunc = mvInside=> {
+			ns.ls(ns.getHostname(), endWithSlash(src))
+				.filter((path)=>path.startsWith(endWithSlash(src)))
+				.map((srcFile)=>{
+					let destFile;
+					if (mvInside) {
+						destFile = endWithSlash(dest) + srcFile.substring(endWithSlash(src, false).lastIndexOf("/")+1);
+					} else {
+					 	destFile = endWithSlash(dest) + srcFile.substring(endWithSlash(src).length);
+					}
+					// ns.print(destFile, " ", srcFile, " ", endWithSlash(src, false).lastIndexOf("/")+1, " ", src);
+					return {srcFile, destFile};})
+				.forEach((param)=>
+					ns.mv(ns.getHostname(), param.srcFile, param.destFile));
+		};
+	//If src is file, just move to new location
+	} else {
+		mvFunc = mvInside=> {
+			if (mvInside) {
+				const destFile = endWithSlash(dest) + src.substring(src.lastIndexOf("/")+1);
+				ns.mv(ns.getHostname(), src, destFile);
+			} else {
+				ns.mv(ns.getHostname(), src, dest);
+			}
+		};
+	}
+
+	//put src inside dest
+	if (isFolder(ns, dest)) {
+		mvFunc(true);
+
+	//ovewrite dest
+	} else if (ns.fileExists(dest)) {
+		if (isFolder(ns, src)) {
+			ns.tprint("src: ", src, " is folder, cannot overwrite file: ", dest);
+			ns.exit();
+		}
+		mvFunc(false);
+
+	//dest not exist, pure rename
+	} else {
+		mvFunc(false);
+	}
+}
+
+
+================================================
+FILE: src/tools/rm.js
+================================================
+import {isFolder, fileOrFolderExist, formatAbsolutePath, endWithSlash} from "/lib/files.js";
+import {withFlag} from "/lib/arguments.js";
+
+/** @param {NS} ns */
+export async function main(ns) {
+	let argument = ns.args;
+	const recursive = withFlag(argument[0], 'r');
+	if (recursive) {
+		argument = argument.slice(1);
+	}
+
+	const target = formatAbsolutePath(argument[0], false);
+
+	if (!fileOrFolderExist(ns, target)) {
+		ns.tprint("target not exist: ", target);
+		ns.exit();
+	}
+
+	if (recursive && isFolder(ns, target)) {
+		ns.ls(ns.getHostname(), target)
+			.filter(path=>path.startsWith(endWithSlash(target)))
+			.forEach(file=>ns.rm(formatAbsolutePath(file)));
+	} else {
+		if (isFolder(ns, target)) {
+			ns.tprint("target is folder: ", target);
+			ns.exit();
+		}
+
+		ns.rm(formatAbsolutePath(target));
+	}
+}
+
+
+================================================
+FILE: src/tools/scp.js
+================================================
+import {withFlag} from "/lib/arguments.js";
+import {isFolder, lsPath, formatAbsolutePath} from "/lib/files.js";
+
+/** @param {NS} ns */
+export async function main(ns) {
+	let argument=ns.args;
+	const recursive=withFlag(argument[0], 'r');
+	if (recursive) {
+		argument=argument.slice(1);
+	}
+
+	const files=argument.slice(0,-1).map(arg=>formatAbsolutePath(arg, false));
+	const dest=argument[argument.length-1];
+
+	for (let ind in files) {
+		const file=files[ind];
+		if (isFolder(ns, file)) {
+			if (!recursive) {
+				ns.tprint("-r flag not specified, not copying folder: ", file);
+				continue;
+			}
+
+			// ns.tprint(file, " ", lsPath(ns, file), " ", dest);
+			ns.scp(lsPath(ns, file), dest);
+		} else {
+			// ns.tprint(file, " ", dest);
+			ns.scp(file, dest);
+		}
+	}
+}
+

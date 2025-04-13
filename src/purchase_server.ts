@@ -1,31 +1,27 @@
 import { NS } from '@ns';
 import { formatRam, padNum } from './lib/util_normal_ram';
-
+import { isSingleInstance } from './lib/util_low_ram';
 /** @param {NS} ns */
 export async function main(ns: NS): Promise<void> {
-    // check argument legth first
-    const args = ns.args;
-    if (args.length === 0) {
-        ns.disableLog('ALL');
-        ns.ui.openTail();
-        ns.ui.setTailTitle('Purchase Server');
+    // Ensure single instance
+    if (!isSingleInstance(ns)) { return; }
 
-        while (true) {
-            const budget = ns.getServerMoneyAvailable('home') * 0.9;
-            if (isAllMaxed(ns, 1048576)) { break; }
+    // Parse budget argument, default to 90% of available money if not provided
+    const budgetArg = ns.args[0];
+    const budget = typeof budgetArg === 'number'
+        ? budgetArg
+        : ns.getServerMoneyAvailable('home') * 0.9;
 
-            const upgradeResult = findOptimalUpgrade(ns, 1048576, 8, budget);
-            if (upgradeResult.shouldUpgrade) {
-                const success = upgradeServer(ns, upgradeResult.server, upgradeResult.currentRam, upgradeResult.targetRam);
-                await ns.sleep(success ? 10 : 10000); // real wait if failed else basic wait
-            } else {
-                await ns.sleep(10000);
-            }
-        }
+    if (isAllMaxed(ns, 1048576)) {
+        ns.print('All servers are already maxed out.');
+        return;
+    }
+
+    const upgradeResult = findOptimalUpgrade(ns, 1048576, 64, budget);
+    if (upgradeResult.shouldUpgrade) {
+        upgradeServer(ns, upgradeResult.server, upgradeResult.currentRam, upgradeResult.targetRam);
     } else {
-        const maxRam = Number(ns.args[0]);
-        const budget = Number(ns.args[1]);
-        upgradeByBudget(ns, maxRam, budget);
+        ns.print('No optimal server upgrades found within budget.');
     }
 }
 

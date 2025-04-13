@@ -1,4 +1,6 @@
 import { NS } from '@ns';
+import { executeCommand } from './simple_through_file';
+import { isSingleInstance } from '../lib/util_low_ram';
 
 const PORT_OPENER_NAMES: string[] = [
     'tor',
@@ -23,9 +25,10 @@ const PORT_OPENER_COSTS: number[] = [
 export async function main(ns: NS): Promise<void> {
     // Create a copy of opener names to buy
     let remainingToBuy = [...PORT_OPENER_NAMES];
-
+    // check if single instance if already have script running just exits
+    if (!isSingleInstance(ns)) { return; }
     while (remainingToBuy.length > 0) {
-        remainingToBuy = buyPortOpeners(ns, remainingToBuy);
+        remainingToBuy = await buyPortOpeners(ns, remainingToBuy);
         if (remainingToBuy.length === 0) {
             ns.tprint('All port openers purchased successfully!');
             break;
@@ -35,7 +38,7 @@ export async function main(ns: NS): Promise<void> {
     }
 }
 
-export function buyPortOpeners(ns: NS, openersToBuy: string[]): string[] {
+export async function buyPortOpeners(ns: NS, openersToBuy: string[]): Promise<string[]> {
     // Create a new array to track remaining items to buy
     const remaining: string[] = [];
 
@@ -52,9 +55,9 @@ export function buyPortOpeners(ns: NS, openersToBuy: string[]): string[] {
         if (ns.getPlayer().money >= cost) {
             let success = false;
             if (opener === 'tor') {
-                success = ns.singularity.purchaseTor();
+                success = await executeCommand(ns, 'ns.singularity.purchaseTor()');
             } else {
-                success = ns.singularity.purchaseProgram(opener);
+                success = await executeCommand(ns, `ns.singularity.purchaseProgram("${opener}")`);
             }
         }
         remaining.push(opener);

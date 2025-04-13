@@ -1,4 +1,4 @@
-import { NS, ProcessInfo, Player } from '@ns';
+import { NS } from '@ns';
 
 // Type definitions for special value serialization
 interface SpecialValue {
@@ -9,19 +9,6 @@ interface SpecialValue {
 type JsonValue = string | number | boolean | null | JsonObject | JsonArray;
 type JsonObject = { [key: string]: JsonValue };
 type JsonArray = JsonValue[];
-
-type SerializedValue = JsonValue | SpecialValue;
-
-/**
- * Custom JSON replacer to handle special JavaScript values
- */
-function jsonReplacer(key: string, value: unknown): SerializedValue {
-    if (value === undefined) return { $type: 'undefined' };
-    if (value === Infinity) return { $type: 'number', $value: 'Infinity' };
-    if (value === -Infinity) return { $type: 'number', $value: '-Infinity' };
-    if (Number.isNaN(value)) return { $type: 'number', $value: 'NaN' };
-    return value as SerializedValue;
-}
 
 /**
  * Custom JSON reviver to restore special JavaScript values
@@ -50,6 +37,7 @@ function jsonReviver(key: string, value: unknown): unknown {
 export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
     const outputFile = `/tmp/${Date.now()}.txt`;
     const scriptFile = `/tmp/${Date.now()}.js`;
+    const funcName = command.replace(/^ns\./, '').split('(')[0];
     const script = `
         export async function main(ns) {
             try {
@@ -63,9 +51,25 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
                 }
                 
                 const result = ${command};
-                const serialized = JSON.stringify(result, jsonReplacer);
-                await ns.write("${outputFile}", serialized, "w");
+                
+                // Handle void/undefined results explicitly
+                if (result === undefined) {
+                    await ns.write("${outputFile}", "SUCCESS:VOID", "w");
+                } else {
+                    const serialized = JSON.stringify(result, jsonReplacer);
+                    await ns.write("${outputFile}", serialized, "w");
+                }
             } catch(err) {
+                // Get RAM cost of the function and available RAM
+                const ramCost = ns.getFunctionRamCost(\`${funcName}\`);
+                const maxRam = ns.getServerMaxRam('home');
+                const usedRam = ns.getServerUsedRam('home');
+                const availableRam = maxRam - usedRam;
+                
+                // Print RAM info directly to terminal
+                ns.tprint(\`RAM info: Function ${funcName} costs \${ramCost}GB. Available RAM: \${availableRam}GB\`);
+                
+                // Still write error to file so main script knows it failed
                 await ns.write("${outputFile}", "ERROR: " + String(err), "w");
             }
         }
@@ -73,7 +77,8 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
     await ns.write(scriptFile, script, 'w');
     const pid = ns.run(scriptFile);
     if (pid === 0) {
-        throw new Error(`Failed to execute command: ${command}`);
+        ns.print(`ERROR: Failed to execute command: ${command}`);
+        return undefined as unknown as T;
     }
 
     // Wait for the script to complete with better timeout handling
@@ -87,12 +92,19 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
     }
 
     if (!completed) {
-        throw new Error(`Command timed out: ${command}`);
+        ns.print(`ERROR: Command timed out: ${command}`);
+        return undefined as unknown as T;
     }
 
     const fileContent = ns.read(outputFile);
     if (fileContent.startsWith('ERROR:')) {
-        throw new Error(`Command execution failed: ${fileContent}`);
+        ns.print(`ERROR: Command execution failed: ${command}`);
+        return undefined as unknown as T;
+    }
+
+    // Handle special case for void/undefined return values
+    if (fileContent === 'SUCCESS:VOID') {
+        return undefined as unknown as T;
     }
 
     // Clean up temp files
@@ -114,6 +126,7 @@ function parseToType<T>(fileContent: string): T {
         // Handle primitive values specially for simple cases
         if (fileContent === 'undefined') return undefined as unknown as T;
         if (fileContent === 'null') return null as unknown as T;
+        if (fileContent === 'SUCCESS:VOID') return undefined as unknown as T;
         if (fileContent === 'true') return true as unknown as T;
         if (fileContent === 'false') return false as unknown as T;
         if (fileContent === 'NaN') return NaN as unknown as T;
@@ -131,130 +144,4 @@ function parseToType<T>(fileContent: string): T {
         // Last resort, return as string
         return fileContent as unknown as T;
     }
-}
-
-/**
- * Converts an object to string representation
- * @param {T} obj - The object to convert
- * @returns {string} String representation of the object
- */
-function objectToString<T>(obj: T): string {
-    if (obj === undefined) return 'undefined';
-    if (obj === null) return 'null';
-    if (Number.isNaN(obj)) return 'NaN';
-    if (obj === Infinity) return 'Infinity';
-    if (obj === -Infinity) return '-Infinity';
-
-    // For arrays and objects, use JSON.stringify with custom replacer
-    if (typeof obj === 'object') {
-        try {
-            return JSON.stringify(obj, jsonReplacer);
-        } catch (e) {
-            // Fall back to toString if JSON.stringify fails
-            return String(obj);
-        }
-    }
-
-    // For primitive types
-    return String(obj);
-}
-
-/**
- * Scan for connected servers
- * @param {NS} ns - The NS instance
- * @param {string} server - Server to scan from
- * @returns {Promise<string[]>} Connected servers
- */
-export async function scan(ns: NS, server?: string): Promise<string[]> {
-    const cmd = server ? `ns.scan("${server}")` : 'ns.scan()';
-    return await executeCommand<string[]>(ns, cmd);
-}
-
-/**
- * Get the list of purchased servers
- * @param {NS} ns - The NS instance
- * @returns {Promise<string[]>} List of purchased servers
- */
-export async function getPurchasedServers(ns: NS): Promise<string[]> {
-    return await executeCommand<string[]>(ns, 'ns.getPurchasedServers()');
-}
-
-/**
- * Get the process list for a server
- * @param {NS} ns - The NS instance
- * @param {string} hostname - Server name
- * @returns {Promise<ProcessInfo[]>} Process list
- */
-export async function getProcessList(ns: NS, hostname: string): Promise<ProcessInfo[]> {
-    return await executeCommand<ProcessInfo[]>(ns, `ns.ps("${hostname}")`);
-}
-
-/**
- * Get server free RAM
- * @param {NS} ns - The NS instance
- * @param {string} server - Server name
- * @returns {Promise<number>} Server free RAM
- */
-export async function getServerFreeRam(ns: NS, server: string): Promise<number> {
-    const maxRam = await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`);
-    const usedRam = await executeCommand<number>(ns, `ns.getServerUsedRam("${server}")`);
-    return maxRam - usedRam;
-}
-
-/**
- * Get player information
- * @param {NS} ns - The NS instance
- * @returns {Promise<Player>} Player information
- */
-export async function getPlayer(ns: NS): Promise<Player> {
-    return await executeCommand<Player>(ns, 'ns.getPlayer()');
-}
-
-// Interface for test object with special values
-interface TestObject {
-    normal: number;
-    inf: number;
-    neginf: number;
-    nan: number;
-    undef: undefined;
-    nested: {
-        inf: number;
-        nan: number;
-    };
-    arr: (number | undefined)[];
-}
-
-export async function main(ns: NS): Promise<void> {
-    // test out all common function to make sure the algo works seamlessly
-    const maxRam = await executeCommand<number>(ns, 'ns.getServerMaxRam("home")');
-    ns.tprint(`new: ${maxRam} original ${ns.getServerMaxRam('home')}`);
-
-    const purchasedServers = await getPurchasedServers(ns);
-    ns.tprint(`new: ${JSON.stringify(purchasedServers)} original ${JSON.stringify(ns.getPurchasedServers())}`);
-
-    const processList = await getProcessList(ns, 'home');
-    ns.tprint(`new: ${JSON.stringify(processList)} original ${JSON.stringify(ns.ps('home'))}`);
-
-    const serverFreeRam = await executeCommand<number>(ns, 'ns.getServerUsedRam("home")');
-    ns.tprint(`new: ${serverFreeRam} original ${ns.getServerUsedRam('home')}`);
-
-    const player = await executeCommand<Player>(ns, 'ns.getPlayer()');
-    ns.tprint(`new: ${JSON.stringify(player)} original ${JSON.stringify(ns.getPlayer())}`);
-
-    // Test special values in nested objects
-    const testObj = await executeCommand<TestObject>(ns, `
-        {
-            normal: 123,
-            inf: Infinity,
-            neginf: -Infinity,
-            nan: NaN,
-            undef: undefined,
-            nested: { 
-                inf: Infinity, 
-                nan: NaN 
-            },
-            arr: [1, Infinity, NaN, undefined]
-        }
-    `);
-    ns.tprint(`Special values test: ${JSON.stringify(testObj, jsonReplacer)}`);
 }

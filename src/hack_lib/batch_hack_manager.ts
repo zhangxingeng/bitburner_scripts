@@ -292,6 +292,16 @@ export class BatchHackManager {
         ramManager: RamManager,
         maxTargets: number = 1
     ): Promise<number> {
+        // Check if home RAM reservation is being violated - if so, reduce batch load
+        if (ramManager.isHomeReservationViolated()) {
+            this.ns.print('HOME RAM RESERVATION VIOLATED - Reducing batch load to restore reservation');
+            const terminatedBatches = this.reduceActiveBatchLoad(ramManager);
+            if (terminatedBatches > 0) {
+                this.ns.print(`Terminated ${terminatedBatches} batches to free RAM`);
+                return 0;
+            }
+        }
+
         // Get best prepared targets
         const targets = targetManager.getBestTargets(maxTargets, true);
 
@@ -525,10 +535,99 @@ export class BatchHackManager {
         // Calculate RAM utilization percentage
         const totalRam = ramManager.getTotalMaxRam();
         const freeRam = ramManager.getTotalFreeRam();
+        const reservedHomeRam = ramManager.getHomeReservedRam();
         const utilizationPercent = totalRam > 0 ? (totalRam - freeRam) / totalRam * 100 : 0;
 
-        this.ns.print(`Status: ${this.totalBatchesLaunched} total batches launched, ${batchesLaunched} new, ` +
-            `${formatRam(ramManager.getTotalFreeRam())} RAM free, ` +
-            `${formatPercent(utilizationPercent)}% utilized`);
+        // Build compact stats panel
+        const statsPanel = [
+            '┌─── BATCH HACK STATUS ───┐',
+            `│ Total Batches: ${this.totalBatchesLaunched.toString().padEnd(8)} │`,
+            `│ New Batches:   ${batchesLaunched.toString().padEnd(8)} │`,
+            `│ Free RAM:      ${formatRam(freeRam).padEnd(8)} │`,
+            `│ Reserved RAM:  ${formatRam(reservedHomeRam).padEnd(8)} │`,
+            `│ Utilization:   ${formatPercent(utilizationPercent).padEnd(8)} │`,
+            '└───────────────────────┘'
+        ].join('\n');
+
+        this.ns.print(statsPanel);
+    }
+
+    /**
+     * Reduce active batch load when RAM is overcommitted
+     * @param ramManager RAM manager to use
+     * @returns Number of batches terminated
+     */
+    private reduceActiveBatchLoad(ramManager: RamManager): number {
+        // If no active batches, nothing to reduce
+        if (this.activeBatches.size === 0) {
+            return 0;
+        }
+
+        // Sort targets by DPS (lowest first) to terminate least profitable batches first
+        const targets = Array.from(this.activeBatches.entries())
+            .sort((a, b) => a[1].dps - b[1].dps)
+            .map(entry => entry[0]);
+
+        // Try to terminate batches until we've freed enough RAM
+        let terminatedCount = 0;
+        for (const target of targets) {
+            if (!ramManager.isHomeReservationViolated()) {
+                break; // Stop if we've freed enough RAM
+            }
+
+            // Get the batch calculation for this target
+            const batchCalc = this.activeBatches.get(target);
+            if (!batchCalc) continue;
+
+            // Remove the batch from active batches
+            this.activeBatches.delete(target);
+            terminatedCount++;
+
+            // Kill all running processes for this target
+            this.terminateTargetProcesses(target);
+
+            // Update RAM manager (this happens automatically in next tick)
+            ramManager.updateRamInfo();
+
+            this.ns.print(`Terminated batching for ${target} (${formatMoney(batchCalc.dps)}/sec) to free RAM`);
+        }
+
+        return terminatedCount;
+    }
+
+    /**
+     * Terminate all running processes for a target
+     * @param target Target server hostname
+     */
+    private terminateTargetProcesses(target: string): void {
+        const serverList = this.ns.getPurchasedServers();
+        serverList.push('home');
+
+        const scripts = [
+            this.config.scriptPaths.hack,
+            this.config.scriptPaths.grow,
+            this.config.scriptPaths.weaken1,
+            this.config.scriptPaths.weaken2
+        ];
+
+        // Kill all batch scripts targeting this server
+        for (const server of serverList) {
+            // Skip if server doesn't exist
+            if (!this.ns.serverExists(server)) continue;
+
+            // Get all processes on this server
+            const processes = this.ns.ps(server);
+
+            // Find and kill all batch processes for the target
+            for (const proc of processes) {
+                // Only check batch scripts
+                if (!scripts.includes(proc.filename)) continue;
+
+                // Check if this process targets our server
+                if (proc.args[0] === target) {
+                    this.ns.kill(proc.pid);
+                }
+            }
+        }
     }
 }

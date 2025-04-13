@@ -1,6 +1,6 @@
 import { NS } from '@ns';
-import { executeCommand } from './basic/simple_through_file';
-import { formatMoney, formatTime } from './lib/util_low_ram';
+import { executeCommand } from '../basic/simple_through_file';
+import { formatMoney, formatTime } from '../lib/util_low_ram';
 
 /**
  * Main function for a simple hacking script that targets the most profitable server
@@ -127,10 +127,10 @@ async function executeOptimalAction(
     target: string
 ): Promise<{ action: string, success: boolean, amount?: number }> {
     try {
-        const serverMoney = await executeCommand<number>(ns, `ns.getServerMoneyAvailable("${target}")`);
-        const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
-        const securityLevel = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${target}")`);
-        const minSecurityLevel = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
+        const serverMoney = ns.getServerMoneyAvailable(target);
+        const maxMoney = ns.getServerMaxMoney(target);
+        const securityLevel = ns.getServerSecurityLevel(target);
+        const minSecurityLevel = ns.getServerMinSecurityLevel(target);
 
         // Decide what action to take based on server conditions
         if (securityLevel > minSecurityLevel + 5) {
@@ -176,8 +176,8 @@ async function executeOptimalAction(
  * Calculate threads needed for a weaken operation to reach min security
  */
 async function calculateWeakenThreads(ns: NS, target: string): Promise<number> {
-    const currentSecurity = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${target}")`);
-    const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${target}")`);
+    const currentSecurity = ns.getServerSecurityLevel(target);
+    const minSecurity = ns.getServerMinSecurityLevel(target);
     const securityDiff = Math.max(0, currentSecurity - minSecurity);
     const weakenAmount = await executeCommand<number>(ns, 'ns.weakenAnalyze(1)');
     return Math.ceil(securityDiff / weakenAmount);
@@ -187,10 +187,11 @@ async function calculateWeakenThreads(ns: NS, target: string): Promise<number> {
  * Calculate threads needed for a grow operation to reach max money
  */
 async function calculateGrowThreads(ns: NS, target: string): Promise<number> {
-    const currentMoney = Math.max(1, await executeCommand<number>(ns, `ns.getServerMoneyAvailable("${target}")`));
-    const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${target}")`);
+    const currentMoney = Math.max(1, ns.getServerMoneyAvailable(target));
+    const maxMoney = ns.getServerMaxMoney(target);
     const growthFactor = maxMoney / currentMoney;
-    return Math.ceil(await executeCommand<number>(ns, `ns.growthAnalyze("${target}", ${growthFactor})`));
+    const growthPerThread = await executeCommand<number>(ns, `ns.growthAnalyze("${target}", ${growthFactor})`);
+    return Math.ceil(growthPerThread);
 }
 
 /**
@@ -303,7 +304,7 @@ async function getTargetServer(ns: NS): Promise<string> {
         if (hackingLevel < 10) {
             for (const server of servers) {
                 if (server === 'n00dles') {
-                    const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                    const hasRoot = ns.hasRootAccess(server);
                     if (hasRoot) {
                         return 'n00dles';
                     }
@@ -315,13 +316,13 @@ async function getTargetServer(ns: NS): Promise<string> {
         // Regular target selection
         for (const server of servers) {
             try {
-                const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
+                const hasRoot = ns.hasRootAccess(server);
                 if (!hasRoot) continue;
 
-                const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${server}")`);
+                const maxMoney = ns.getServerMaxMoney(server);
                 if (maxMoney <= 0) continue;
 
-                const reqHackLevel = await executeCommand<number>(ns, `ns.getServerRequiredHackingLevel("${server}")`);
+                const reqHackLevel = ns.getServerRequiredHackingLevel(server);
                 if (hackingLevel >= reqHackLevel) {
                     targets.push(server);
                 }
@@ -336,8 +337,8 @@ async function getTargetServer(ns: NS): Promise<string> {
                 try {
                     if (server === 'home') continue;
 
-                    const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
-                    const reqHackLevel = await executeCommand<number>(ns, `ns.getServerRequiredHackingLevel("${server}")`);
+                    const hasRoot = ns.hasRootAccess(server);
+                    const reqHackLevel = ns.getServerRequiredHackingLevel(server);
 
                     if (hasRoot && hackingLevel >= reqHackLevel) {
                         return server;
@@ -371,18 +372,18 @@ async function getTargetServer(ns: NS): Promise<string> {
 
         // Last resort - try to return any server that might work
         try {
-            if (await executeCommand<boolean>(ns, 'ns.hasRootAccess("n00dles")')) {
+            if (ns.hasRootAccess('n00dles')) {
                 return 'n00dles';
             }
 
-            if (await executeCommand<boolean>(ns, 'ns.hasRootAccess("foodnstuff")')) {
+            if (ns.hasRootAccess('foodnstuff')) {
                 return 'foodnstuff';
             }
 
             // Try to find any rooted server
             const servers = await getAllServers(ns);
             for (const server of servers) {
-                if (server !== 'home' && await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`)) {
+                if (server !== 'home' && ns.hasRootAccess(server)) {
                     return server;
                 }
             }
@@ -409,8 +410,8 @@ async function getAllServers(ns: NS): Promise<string[]> {
 
             try {
                 // Get connected servers
-                const scanResult = await executeCommand<string>(ns, `JSON.stringify(ns.scan("${current}"))`);
-                const connected = JSON.parse(scanResult) as string[];
+                const scanResult = ns.scan(current);
+                const connected = scanResult as string[];
 
                 for (const server of connected) {
                     if (!visited.has(server)) {
@@ -441,7 +442,7 @@ async function calculateServerWeight(ns: NS, server: string): Promise<number> {
         if (server.startsWith('hacknet-node')) return 0;
 
         // Get server stats using low RAM approach
-        const maxMoney = await executeCommand<number>(ns, `ns.getServerMaxMoney("${server}")`);
+        const maxMoney = ns.getServerMaxMoney(server);
         if (maxMoney <= 0) return 0;
 
         const hackChance = await executeCommand<number>(ns, `ns.hackAnalyzeChance("${server}")`);
@@ -451,8 +452,8 @@ async function calculateServerWeight(ns: NS, server: string): Promise<number> {
         if (weakenTime === 0) return 0;
 
         // Early game modifier: boost weight for servers with higher money and lower security
-        const minSecurity = await executeCommand<number>(ns, `ns.getServerMinSecurityLevel("${server}")`);
-        const currentSecurity = await executeCommand<number>(ns, `ns.getServerSecurityLevel("${server}")`);
+        const minSecurity = ns.getServerMinSecurityLevel(server);
+        const currentSecurity = ns.getServerSecurityLevel(server);
         const securityRatio = minSecurity / Math.max(1, currentSecurity);
 
         // Calculate basic weight
@@ -492,8 +493,8 @@ async function runScript(ns: NS, scriptName: string, target: string, threads: nu
 
         for (const server of allServers) {
             try {
-                const hasRoot = await executeCommand<boolean>(ns, `ns.hasRootAccess("${server}")`);
-                const maxRam = await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`);
+                const hasRoot = ns.hasRootAccess(server);
+                const maxRam = ns.getServerMaxRam(server);
 
                 if (hasRoot && maxRam > 0) {
                     servers.push(server);
@@ -525,10 +526,10 @@ async function runScript(ns: NS, scriptName: string, target: string, threads: nu
             try {
                 // Use less RAM on home to keep it available for other scripts
                 const maxRam = server === 'home'
-                    ? Math.floor(await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`) * 0.7) // Use 70% of home RAM
-                    : await executeCommand<number>(ns, `ns.getServerMaxRam("${server}")`);
+                    ? Math.floor(ns.getServerMaxRam(server) * 0.7) // Use 70% of home RAM
+                    : ns.getServerMaxRam(server);
 
-                const usedRam = await executeCommand<number>(ns, `ns.getServerUsedRam("${server}")`);
+                const usedRam = ns.getServerUsedRam(server);
                 const availableRam = maxRam - usedRam;
                 let possibleThreads = Math.floor(availableRam / ramPerThread);
 

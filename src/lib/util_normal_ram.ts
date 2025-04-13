@@ -103,27 +103,6 @@ export function getPaths(ns: NS, regex_str: string, pathCache: Map<string, strin
     return paths;
 }
 
-/**
- * Ensures only one instance of the script runs
- * @param {NS} ns - Netscript API
- * @param {boolean} kill_other - Whether to kill other instances if found
- * @returns {boolean} True if no other instances were running (or they were killed)
- */
-export function isSingleInstance(ns: NS, kill_other: boolean = false): boolean {
-    const hostname = ns.getHostname();
-    const scriptName = ns.getScriptName();
-    const currentPid = ns.pid;
-    const other_pids = ns.ps(hostname).filter((s: { filename: string; pid: number }) =>
-        s.filename === scriptName && s.pid !== currentPid);
-    if (kill_other && other_pids.length > 0) {
-        for (const process of other_pids) {
-            ns.kill(process.pid);
-        }
-        ns.tprint('All previous instances killed');
-    }
-    return other_pids.length === 0;
-}
-
 
 /**
  * Format RAM to human-readable string

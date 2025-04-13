@@ -3,7 +3,7 @@ import { formatMoney } from './lib/util_normal_ram';
 import { StockConfig } from './stock_lib/stock_config';
 import { StockMarket } from './stock_lib/stock_market';
 import { StockTrader } from './stock_lib/stock_trader';
-import { isSingleInstance } from './lib/util_normal_ram';
+import { isSingleInstance } from './lib/util_low_ram';
 
 // For HUD display
 interface HudElement extends HTMLElement {
@@ -25,6 +25,9 @@ export async function main(ns: NS): Promise<void> {
         ['disableHud', false]
     ]);
 
+    // if no SWE account, exit
+    if (!ns.stock.hasWSEAccount() || !ns.stock.hasTIXAPIAccess()) { return; }
+
     // Process liquidate flag
     if (args.l || args.liquidate) {
         await liquidateAllPositions(ns);
@@ -32,10 +35,7 @@ export async function main(ns: NS): Promise<void> {
     }
 
     // Ensure only one instance is running
-    if (!isSingleInstance(ns)) {
-        ns.tprint('ERROR: An instance of the stock script is already running. Use --liquidate to sell all positions first.');
-        return;
-    }
+    if (!isSingleInstance(ns)) { return; }
 
     // Initialize objects
     const config = new StockConfig(ns);

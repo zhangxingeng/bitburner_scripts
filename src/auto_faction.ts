@@ -1,5 +1,6 @@
-import { NS, FactionWorkType, CompanyName } from '@ns';
-import { formatTime, shortNumber } from '../lib/util_normal_ram';
+import { NS, FactionWorkType } from '@ns';
+import { formatTime, shortNumber } from './lib/util_low_ram';
+import { executeCommand } from './basic/simple_through_file';
 
 // Constants
 const STATUS_UPDATE_INTERVAL = 5000; // 5 seconds for status updates
@@ -64,10 +65,10 @@ export async function main(ns: NS): Promise<void> {
  */
 async function workContinuouslyForFaction(ns: NS, target: FactionWorkTarget): Promise<void> {
     // Begin working for the faction
-    const shouldFocus = ns.singularity.isFocused();
-    const workType = findBestWorkType(ns, target.factionName);
+    const shouldFocus = await executeCommand<boolean>(ns, 'ns.singularity.isFocused()');
+    const workType = await findBestWorkType(ns, target.factionName);
 
-    if (!workForFaction(ns, target.factionName, workType, shouldFocus)) {
+    if (!await myWorkForFaction(ns, target.factionName, workType, shouldFocus)) {
         ns.print(`Failed to start working for faction ${target.factionName}. Will retry.`);
         await ns.sleep(5000); // Wait 5 seconds before retrying
         return;
@@ -86,15 +87,15 @@ async function workContinuouslyForFaction(ns: NS, target: FactionWorkTarget): Pr
 
     while (continueWorking) {
         // Check if work was interrupted
-        if (!isWorkingForTargetFaction(ns, target.factionName)) {
+        if (!await isWorkingForTargetFaction(ns, target.factionName)) {
             ns.print(`Work for ${target.factionName} was interrupted. Restarting...`);
-            if (!workForFaction(ns, target.factionName, workType, shouldFocus)) {
+            if (!await myWorkForFaction(ns, target.factionName, workType, shouldFocus)) {
                 return; // If we can't restart, exit and try a different faction
             }
         }
 
         // Update current reputation and calculate time elapsed
-        const currentRep = ns.singularity.getFactionRep(target.factionName);
+        const currentRep = await executeCommand<number>(ns, `ns.singularity.getFactionRep("${target.factionName}")`);
         const timeElapsed = Date.now() - startTime;
 
         // Check if we've reached our target rep
@@ -144,22 +145,22 @@ async function findOptimalFactionTarget(ns: NS, measureRepRates: boolean = false
 /**
  * Wrapper for ns.singularity.workForFaction that respects user's focus preference
  */
-function workForFaction(ns: NS, faction: string, workType: FactionWorkType, focus: boolean = true): boolean {
-    return ns.singularity.workForFaction(faction, workType, focus);
+async function myWorkForFaction(ns: NS, faction: string, workType: FactionWorkType, focus: boolean = true): Promise<boolean> {
+    return await executeCommand<boolean>(ns, `ns.singularity.workForFaction("${faction}", "${workType}", ${focus})`);
 }
 
 /**
  * Wrapper for ns.singularity.workForCompany that respects user's focus preference
  */
-function workForCompany(ns: NS, company: string, focus: boolean = true): boolean {
-    return ns.singularity.workForCompany(company as CompanyName, focus);
+async function myWorkForCompany(ns: NS, company: string, focus: boolean = true): Promise<boolean> {
+    return await executeCommand<boolean>(ns, `ns.singularity.workForCompany("${company}", ${focus})`);
 }
 
 /**
  * Checks if currently working for the specified faction
  */
-function isWorkingForTargetFaction(ns: NS, factionName: string): boolean {
-    const currentWork = ns.singularity.getCurrentWork();
+async function isWorkingForTargetFaction(ns: NS, factionName: string): Promise<boolean> {
+    const currentWork = await executeCommand<CurrentWork | null>(ns, 'ns.singularity.getCurrentWork()');
     return currentWork?.type === 'FACTION' && currentWork.factionName === factionName;
 }
 
@@ -179,8 +180,9 @@ function logTopTargets(ns: NS, targets: FactionWorkTarget[]): void {
  * Get all possible faction work targets, sorted by time to completion
  */
 async function getAllFactionWorkTargets(ns: NS, measureRepRates: boolean): Promise<FactionWorkTarget[]> {
-    const playerFactions = ns.getPlayer().factions;
-    const ownedAugs = ns.singularity.getOwnedAugmentations(true);
+    const player = ns.getPlayer();
+    const playerFactions = player.factions;
+    const ownedAugs = await executeCommand<string[]>(ns, 'ns.singularity.getOwnedAugmentations(true)');
     const targets: FactionWorkTarget[] = [];
 
     // Static cache of reputation rates to avoid constant re-measurement
@@ -189,7 +191,13 @@ async function getAllFactionWorkTargets(ns: NS, measureRepRates: boolean): Promi
     // For each faction the player has joined, find all possible augmentation targets
     for (const faction of playerFactions) {
         // Get available augmentations from this faction
-        const availableAugs = ns.singularity.getAugmentationsFromFaction(faction);
+        const availableAugs = await executeCommand<string[]>(ns, `ns.singularity.getAugmentationsFromFaction("${faction}")`);
+
+        // Check if availableAugs is defined before filtering
+        if (!availableAugs) {
+            ns.print(`WARNING: Could not get augmentations for faction "${faction}"`);
+            continue;
+        }
 
         // Filter out already owned augmentations
         const unownedAugs = availableAugs.filter(aug => !ownedAugs.includes(aug));
@@ -197,7 +205,7 @@ async function getAllFactionWorkTargets(ns: NS, measureRepRates: boolean): Promi
         if (unownedAugs.length === 0) continue;
 
         // Get current reputation with faction
-        const currentRep = ns.singularity.getFactionRep(faction);
+        const currentRep = await executeCommand<number>(ns, `ns.singularity.getFactionRep("${faction}")`);
 
         // Determine if we need to measure rep gain for this faction
         let repPerSecond: number;
@@ -219,7 +227,7 @@ async function getAllFactionWorkTargets(ns: NS, measureRepRates: boolean): Promi
 
         // For each possible augmentation, create a work target
         for (const aug of unownedAugs) {
-            const repNeeded = ns.singularity.getAugmentationRepReq(aug);
+            const repNeeded = await executeCommand<number>(ns, `ns.singularity.getAugmentationRepReq("${aug}")`);
 
             // Skip if we already have enough reputation
             if (currentRep >= repNeeded) continue;
@@ -259,23 +267,23 @@ async function getAllFactionWorkTargets(ns: NS, measureRepRates: boolean): Promi
  */
 async function measureFactionRepGainRate(ns: NS, factionName: string): Promise<number> {
     // Save current work state and focus state
-    const originalWork = ns.singularity.getCurrentWork() as CurrentWork;
-    const wasFocused = ns.singularity.isFocused();
+    const originalWork = await executeCommand<CurrentWork | null>(ns, 'ns.singularity.getCurrentWork()');
+    const wasFocused = await executeCommand<boolean>(ns, 'ns.singularity.isFocused()');
 
     // Start working for the faction with the optimal work type
-    const workType = findBestWorkType(ns, factionName);
-    if (!workForFaction(ns, factionName, workType, wasFocused)) {
+    const workType = await findBestWorkType(ns, factionName);
+    if (!await myWorkForFaction(ns, factionName, workType, wasFocused)) {
         return 0; // Couldn't start working
     }
 
     // Measure reputation gain
-    const startRep = ns.singularity.getFactionRep(factionName);
+    const startRep = await executeCommand<number>(ns, `ns.singularity.getFactionRep("${factionName}")`);
     await ns.sleep(MEASUREMENT_DURATION);
-    const endRep = ns.singularity.getFactionRep(factionName);
+    const endRep = await executeCommand<number>(ns, `ns.singularity.getFactionRep("${factionName}")`);
     const repPerSecond = (endRep - startRep) * (1000 / MEASUREMENT_DURATION);
 
     // Restore original work if there was any
-    restoreOriginalWork(ns, originalWork, wasFocused);
+    await restoreOriginalWork(ns, originalWork, wasFocused);
 
     return repPerSecond;
 }
@@ -283,28 +291,26 @@ async function measureFactionRepGainRate(ns: NS, factionName: string): Promise<n
 /**
  * Restore the original work state after measuring rep gain
  */
-function restoreOriginalWork(ns: NS, work: CurrentWork, wasFocused: boolean): void {
+async function restoreOriginalWork(ns: NS, work: CurrentWork | null, wasFocused: boolean): Promise<void> {
     if (!work || !work.type) {
-        ns.singularity.stopAction();
+        await executeCommand(ns, 'ns.singularity.stopAction()');
         return;
     }
 
     if (work.type === 'FACTION' && work.factionName && work.factionWorkType) {
-        workForFaction(ns, work.factionName, work.factionWorkType, wasFocused);
+        await myWorkForFaction(ns, work.factionName, work.factionWorkType, wasFocused);
     } else if (work.type === 'COMPANY' && work.companyName) {
-        workForCompany(ns, work.companyName, wasFocused);
+        await myWorkForCompany(ns, work.companyName, wasFocused);
     } else {
-        ns.singularity.stopAction();
+        await executeCommand(ns, 'ns.singularity.stopAction()');
     }
 }
 
 /**
  * Find the best work type for a faction based on player stats
  */
-function findBestWorkType(ns: NS, factionName: string): FactionWorkType {
+async function findBestWorkType(ns: NS, factionName: string): Promise<FactionWorkType> {
     const player = ns.getPlayer();
-
-    // Define faction categories
     const hackingFactions = [
         'CyberSec', 'NiteSec', 'BitRunners', 'The Black Hand',
         'Netburners', 'Tian Di Hui', 'Daedalus'

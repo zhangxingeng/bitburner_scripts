@@ -1,6 +1,6 @@
 import { NS } from '@ns';
+import { isSingleInstance } from '../lib/util_low_ram';
 // import { formatMoney, formatTime } from '../lib/utils';
-import { executeCommand } from './simple_through_file';
 
 function formatMoney(money: number): string {
     return money.toLocaleString();
@@ -11,9 +11,9 @@ function formatTime(ms: number): string {
 }
 
 // Constants
-const MAX_PAYOFF_TIME = 3600; // 1 hour in seconds
+const MAX_PAYOFF_TIME = 18000; // 5 hours in seconds
 const CONTINUOUS = true; // Set to false to run once
-const INTERVAL = 1000; // Rate at which the program purchases upgrades when running continuously
+const INTERVAL = 200; // Rate at which the program purchases upgrades when running continuously
 const MAX_SPEND = Number.MAX_VALUE; // The maximum amount of money to spend on upgrades
 const RESERVE = 0; // Reserve this much cash
 
@@ -22,16 +22,13 @@ let haveHacknetServers = true;
 
 export async function main(ns: NS): Promise<void> {
     // Ensure only one instance is running
-    // if (!isSingleInstance(ns, true)) {
-    //     ns.print('Another instance is already running. Exiting.');
-    //     return;
-    // }
+    if (!isSingleInstance(ns)) { return; }
 
     // Disable logs to reduce clutter
     ns.disableLog('ALL');
     ns.ui.openTail(); // Open the script's log window
 
-    const numNodes = await executeCommand<number>(ns, 'ns.hacknet.numNodes()');
+    const numNodes = ns.hacknet.numNodes();
 
     setStatus(ns, `Starting hacknet-upgrade-manager with purchase payoff time limit of ${formatTime(MAX_PAYOFF_TIME * 1000)} and ` +
         (MAX_SPEND == Number.MAX_VALUE ? 'no spending limit' : `a spend limit of ${formatMoney(MAX_SPEND)}`) +
@@ -40,7 +37,7 @@ export async function main(ns: NS): Promise<void> {
     // Check if we have hacknet servers
     try {
         if (numNodes > 0) {
-            const hashCapacity = await executeCommand<number>(ns, 'ns.hacknet.hashCapacity()');
+            const hashCapacity = ns.hacknet.hashCapacity();
             haveHacknetServers = hashCapacity > 0;
         }
     } catch {
@@ -52,7 +49,7 @@ export async function main(ns: NS): Promise<void> {
     let remainingBudget = MAX_SPEND;
     do {
         try {
-            const moneySpent = await upgradeHacknet(ns);
+            const moneySpent = upgradeHacknet(ns);
 
             // Track spending
             if (moneySpent === false) {
@@ -67,7 +64,7 @@ export async function main(ns: NS): Promise<void> {
             }
 
             // Display current status
-            await displayHacknetStatus(ns);
+            displayHacknetStatus(ns);
 
         } catch (err: unknown) {
             const errorMessage = typeof err === 'string' ? err :
@@ -91,9 +88,9 @@ function setStatus(ns: NS, logMessage: string): void {
 }
 
 /**
- * Get node stats via executeCommand
+ * Get node stats
  */
-async function getNodeStats(ns: NS, index: number): Promise<{
+function getNodeStats(ns: NS, index: number): {
     name: string,
     level: number,
     ram: number,
@@ -101,19 +98,19 @@ async function getNodeStats(ns: NS, index: number): Promise<{
     production: number,
     totalProduction: number,
     cache?: number
-}> {
-    // We need to get all properties individually since we can't get objects directly
-    const name = await executeCommand<string>(ns, `ns.hacknet.getNodeStats(${index}).name`);
-    const level = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).level`);
-    const ram = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).ram`);
-    const cores = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).cores`);
-    const production = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).production`);
-    const totalProduction = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).totalProduction`);
+} {
+    const nodeStats = ns.hacknet.getNodeStats(index);
+    const name = nodeStats.name;
+    const level = nodeStats.level;
+    const ram = nodeStats.ram;
+    const cores = nodeStats.cores;
+    const production = nodeStats.production;
+    const totalProduction = nodeStats.totalProduction;
 
     // Cache might not exist for traditional hacknet nodes
     let cache: number | undefined = undefined;
     try {
-        cache = await executeCommand<number>(ns, `ns.hacknet.getNodeStats(${index}).cache`);
+        cache = nodeStats.cache;
     } catch {
         // If this fails, cache is not available
     }
@@ -124,9 +121,9 @@ async function getNodeStats(ns: NS, index: number): Promise<{
 /**
  * Get player's hacknet multiplier
  */
-async function getHacknetMult(ns: NS): Promise<number> {
+function getHacknetMult(ns: NS): number {
     try {
-        return await executeCommand<number>(ns, 'ns.getPlayer().mults.hacknet_node_money');
+        return ns.getPlayer().mults.hacknet_node_money;
     } catch {
         return 1; // Default multiplier if we can't get it
     }
@@ -135,17 +132,17 @@ async function getHacknetMult(ns: NS): Promise<number> {
 /**
  * Main function to find and purchase the best hacknet upgrade
  */
-async function upgradeHacknet(ns: NS): Promise<number | false> {
+function upgradeHacknet(ns: NS): number | false {
     // Get current hacknet multiplier
-    const currentHacknetMult = await getHacknetMult(ns);
+    const currentHacknetMult = getHacknetMult(ns);
 
     // Find the minimum cache level across all nodes
-    const numNodes = await executeCommand<number>(ns, 'ns.hacknet.numNodes()');
+    const numNodes = ns.hacknet.numNodes();
 
     let minCacheLevel = Number.MAX_VALUE;
     if (numNodes > 0) {
         for (let i = 0; i < numNodes; i++) {
-            const nodeStats = await getNodeStats(ns, i);
+            const nodeStats = getNodeStats(ns, i);
             const cache = nodeStats.cache;
             if (typeof cache === 'number' && cache < minCacheLevel) {
                 minCacheLevel = cache;
@@ -155,7 +152,7 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
         // Re-check if we have hacknet servers based on hash capacity
         if (haveHacknetServers) {
             try {
-                const hashCapacity = await executeCommand<number>(ns, 'ns.hacknet.hashCapacity()');
+                const hashCapacity = ns.hacknet.hashCapacity();
                 haveHacknetServers = hashCapacity > 0;
             } catch {
                 haveHacknetServers = false;
@@ -175,19 +172,18 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
 
     // Evaluate upgrades for each existing node
     for (let i = 0; i < numNodes; i++) {
-        const nodeStats = await getNodeStats(ns, i);
+        const nodeStats = getNodeStats(ns, i);
 
         // Try to calculate production using formulas if available
         if (haveHacknetServers) {
             try {
-                const formulaProduction = await executeCommand<number>(ns,
-                    `ns.formulas.hacknetServers.hashGainRate(
-                        ${nodeStats.level},
-                        0,
-                        ${nodeStats.ram},
-                        ${nodeStats.cores},
-                        ${currentHacknetMult}
-                    )`);
+                const formulaProduction = ns.formulas.hacknetServers.hashGainRate(
+                    nodeStats.level,
+                    0,
+                    nodeStats.ram,
+                    nodeStats.cores,
+                    currentHacknetMult
+                );
                 nodeStats.production = formulaProduction;
             } catch {
                 // If formula API is not available, use the default production value
@@ -197,17 +193,17 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
         worstNodeProduction = Math.min(worstNodeProduction, nodeStats.production);
 
         // Check level upgrade
-        const levelCost = await executeCommand<number>(ns, `ns.hacknet.getLevelUpgradeCost(${i}, 1)`);
+        const levelCost = ns.hacknet.getLevelUpgradeCost(i, 1);
         const levelProd = nodeStats.production * ((nodeStats.level + 1) / nodeStats.level - 1);
         const levelPayoff = levelProd / levelCost;
 
         // Check RAM upgrade
-        const ramCost = await executeCommand<number>(ns, `ns.hacknet.getRamUpgradeCost(${i}, 1)`);
+        const ramCost = ns.hacknet.getRamUpgradeCost(i, 1);
         const ramProd = nodeStats.production * 0.07;
         const ramPayoff = ramProd / ramCost;
 
         // Check cores upgrade
-        const coresCost = await executeCommand<number>(ns, `ns.hacknet.getCoreUpgradeCost(${i}, 1)`);
+        const coresCost = ns.hacknet.getCoreUpgradeCost(i, 1);
         const coresProd = nodeStats.production * ((nodeStats.cores + 5) / (nodeStats.cores + 4) - 1);
         const coresPayoff = coresProd / coresCost;
 
@@ -218,7 +214,7 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
 
         if (haveHacknetServers) {
             try {
-                cacheCost = await executeCommand<number>(ns, `ns.hacknet.getCacheUpgradeCost(${i}, 1)`);
+                cacheCost = ns.hacknet.getCacheUpgradeCost(i, 1);
                 const cache = nodeStats.cache || 0;
                 if (cache <= minCacheLevel) {
                     cacheProd = nodeStats.production * 0.01 / cache;
@@ -274,8 +270,8 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
     }
 
     // Consider buying a new node
-    const newNodeCost = await executeCommand<number>(ns, 'ns.hacknet.getPurchaseNodeCost()');
-    const maxNodes = await executeCommand<number>(ns, 'ns.hacknet.maxNumNodes()');
+    const newNodeCost = ns.hacknet.getPurchaseNodeCost();
+    const maxNodes = ns.hacknet.maxNumNodes();
 
     // If we're at max nodes, payoff is 0, otherwise use the worst production as an estimate
     const newNodePayoff = numNodes === maxNodes ? 0 : worstNodeProduction / newNodeCost;
@@ -315,7 +311,7 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
     }
 
     // Get player money
-    const playerMoney = await executeCommand<number>(ns, 'ns.getServerMoneyAvailable("home")');
+    const playerMoney = ns.getServerMoneyAvailable('home');
 
     // Check if we have enough money after reserve
     if (cost > playerMoney - RESERVE) {
@@ -328,22 +324,22 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
     let success = false;
 
     if (shouldBuyNewNode) {
-        const newNodeIndex = await executeCommand<number>(ns, 'ns.hacknet.purchaseNode()');
+        const newNodeIndex = ns.hacknet.purchaseNode();
         success = newNodeIndex !== -1;
     } else {
         // Perform the upgrade based on type
         switch (bestUpgradeType) {
             case 'level':
-                success = await executeCommand<boolean>(ns, `ns.hacknet.upgradeLevel(${nodeToUpgrade}, 1)`);
+                success = ns.hacknet.upgradeLevel(nodeToUpgrade, 1);
                 break;
             case 'ram':
-                success = await executeCommand<boolean>(ns, `ns.hacknet.upgradeRam(${nodeToUpgrade}, 1)`);
+                success = ns.hacknet.upgradeRam(nodeToUpgrade, 1);
                 break;
             case 'cores':
-                success = await executeCommand<boolean>(ns, `ns.hacknet.upgradeCore(${nodeToUpgrade}, 1)`);
+                success = ns.hacknet.upgradeCore(nodeToUpgrade, 1);
                 break;
             case 'cache':
-                success = await executeCommand<boolean>(ns, `ns.hacknet.upgradeCache(${nodeToUpgrade}, 1)`);
+                success = ns.hacknet.upgradeCache(nodeToUpgrade, 1);
                 break;
             default:
                 success = false;
@@ -360,14 +356,14 @@ async function upgradeHacknet(ns: NS): Promise<number | false> {
 /**
  * Display the current status of hacknet nodes
  */
-async function displayHacknetStatus(ns: NS): Promise<void> {
+function displayHacknetStatus(ns: NS): void {
     ns.clearLog();
 
-    const numNodes = await executeCommand<number>(ns, 'ns.hacknet.numNodes()');
+    const numNodes = ns.hacknet.numNodes();
     if (numNodes === 0) {
         ns.print('No Hacknet Nodes purchased yet');
-        const currentMoney = await executeCommand<number>(ns, 'ns.getServerMoneyAvailable("home")');
-        const nextNodeCost = await executeCommand<number>(ns, 'ns.hacknet.getPurchaseNodeCost()');
+        const currentMoney = ns.getServerMoneyAvailable('home');
+        const nextNodeCost = ns.hacknet.getPurchaseNodeCost();
 
         ns.print(`Current money: ${formatMoney(currentMoney)}`);
         ns.print(`Next node cost: ${formatMoney(nextNodeCost)}`);
@@ -386,7 +382,7 @@ async function displayHacknetStatus(ns: NS): Promise<void> {
 
     // Show details for each node
     for (let i = 0; i < numNodes; i++) {
-        const stats = await getNodeStats(ns, i);
+        const stats = getNodeStats(ns, i);
         totalProduction += stats.production;
         totalProduced += stats.totalProduction;
 
@@ -405,7 +401,7 @@ async function displayHacknetStatus(ns: NS): Promise<void> {
     ns.print(`TOTAL ${' '.repeat(21)}| ${formatMoney(totalProduction)}/s | ${formatMoney(totalProduced)}`);
 
     // Budget info
-    const currentMoney = await executeCommand<number>(ns, 'ns.getServerMoneyAvailable("home")');
+    const currentMoney = ns.getServerMoneyAvailable('home');
     ns.print(`\nCurrent money: ${formatMoney(currentMoney)}`);
     ns.print(`Hacknet budget: ${formatMoney(currentMoney - RESERVE)}`);
 }

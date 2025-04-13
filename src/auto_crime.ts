@@ -1,6 +1,7 @@
 import { NS, Player } from '@ns';
 import { CrimeType, GymType, UniversityClassType, CrimeStats } from './lib/ns_types';
 import { shortNumber, formatPercent } from './lib/util_low_ram';
+import { executeCommand } from './basic/simple_through_file';
 
 
 /** Training multiplier for actions (how many times to train before checking stats) */
@@ -38,40 +39,40 @@ export async function main(ns: NS): Promise<void> {
     // Main crime-training loop
     while (true) {
         // Build the dynamic crime ladder based on current success rates
-        const crimeLadder = buildCrimeLadder(ns);
+        const crimeLadder = await buildCrimeLadder(ns);
         const player = ns.getPlayer();
 
         // Find the current crime index (highest crime with sufficient success rate)
-        const currentCrimeIndex = findCurrentCrimeIndex(ns, crimeLadder);
+        const currentCrimeIndex = await findCurrentCrimeIndex(ns, crimeLadder);
 
         // Check if we should commit current crime or train for next
         if (currentCrimeIndex >= 0) {
             const currentCrime = crimeLadder[currentCrimeIndex];
-            const currentSuccessRate = ns.singularity.getCrimeChance(currentCrime);
+            const currentSuccessRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${currentCrime}")`);
 
             // If we can move to next crime and it has decent chance, train for it
             if (currentCrimeIndex < crimeLadder.length - 1 && currentSuccessRate >= TRAINING_THRESHOLD) {
                 const nextCrime = crimeLadder[currentCrimeIndex + 1];
-                const nextCrimeRate = ns.singularity.getCrimeChance(nextCrime);
+                const nextCrimeRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${nextCrime}")`);
 
                 if (nextCrimeRate >= COMMIT_THRESHOLD) {
                     // Good enough success rate, commit next crime
-                    await commitCrime(ns, nextCrime);
+                    await myCommitCrime(ns, nextCrime);
                 } else {
                     // Train to improve for next crime
                     await trainForCrime(ns, nextCrime);
                 }
             } else {
                 // Commit current crime
-                await commitCrime(ns, currentCrime);
+                await myCommitCrime(ns, currentCrime);
             }
         } else {
             // Train for first crime if nothing else is appropriate
             await trainForCrime(ns, crimeLadder[0]);
         }
 
-        // Brief pause between actions
-        await ns.sleep(100);
+        // No need for additional sleep here since functions already wait for actions to complete
+        // Remove the brief pause between actions
     }
 }
 
@@ -81,13 +82,13 @@ export async function main(ns: NS): Promise<void> {
  * @param {NS} ns - Netscript API
  * @returns {CrimeType[]} - Sorted crime ladder
  */
-function buildCrimeLadder(ns: NS): CrimeType[] {
+async function buildCrimeLadder(ns: NS): Promise<CrimeType[]> {
     const crimeChances: Array<{ crime: CrimeType, chance: number, profit: number }> = [];
 
     // Calculate success chance and expected profit for each crime
     for (const crime of AVAILABLE_CRIMES) {
-        const chance = ns.singularity.getCrimeChance(crime);
-        const stats = ns.singularity.getCrimeStats(crime);
+        const chance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
+        const stats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
         // Expected profit per second = (money * chance) / (time / 1000)
         const profit = (stats.money * chance) / (stats.time / 1000);
         crimeChances.push({ crime, chance, profit });
@@ -170,13 +171,11 @@ function findLowestStat(player: Player): { name: string, value: number } {
 async function trainStat(ns: NS, stat: string): Promise<void> {
     // Ensure player is healthy
     if (ns.getPlayer().hp.current < ns.getPlayer().hp.max) {
-        ns.singularity.hospitalize();
+        await executeCommand(ns, 'ns.singularity.hospitalize()');
     }
 
     // Stop any current action before starting a new one
-    if (ns.singularity.isBusy()) {
-        ns.singularity.stopAction();
-    }
+    await executeCommand(ns, 'ns.singularity.stopAction()');
 
     // Define a reasonable action time based on the type of stat we're training
     let actionTime = 0;
@@ -184,26 +183,42 @@ async function trainStat(ns: NS, stat: string): Promise<void> {
     if (stat === 'hacking' || stat === 'charisma') {
         // Train hacking at university'
         const course = stat === 'hacking' ? UniversityClassType.algorithms : UniversityClassType.leadership;
-        ns.singularity.universityCourse('Rothman University', course, false);
+        await executeCommand(ns, `ns.singularity.universityCourse('Rothman University', "${course}", false)`);
         // Use a basic crime for reference duration (like shoplift or mug)
         const crimeForDuration = CrimeType.shoplift;
-        const crimeStats = ns.singularity.getCrimeStats(crimeForDuration);
-        actionTime = crimeStats.time;
+        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crimeForDuration}")`);
+
+        // Add null check before accessing the time property
+        if (!crimeStats) {
+            ns.print(`ERROR: Could not get crime stats for ${crimeForDuration}`);
+            // Use a default value or return early
+            actionTime = 10000; // Default to 10 seconds if we can't get the real time
+        } else {
+            actionTime = crimeStats.time;
+        }
     } else {
         // Train physical stat at gym
         const gymStat = stat as keyof typeof GymType;
         const gymStatType = GymType[gymStat];
-        ns.singularity.gymWorkout('Powerhouse Gym', gymStatType, false);
+        await executeCommand(ns, `ns.singularity.gymWorkout('Powerhouse Gym', "${gymStatType}", false)`);
         // Use a basic crime for reference duration
         const crimeForDuration = CrimeType.mug;
-        const crimeStats = ns.singularity.getCrimeStats(crimeForDuration);
-        actionTime = crimeStats.time;
+        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crimeForDuration}")`);
+
+        // Add null check before accessing the time property
+        if (!crimeStats) {
+            ns.print(`ERROR: Could not get crime stats for ${crimeForDuration}`);
+            // Use a default value or return early
+            actionTime = 10000; // Default to 10 seconds if we can't get the real time
+        } else {
+            actionTime = crimeStats.time;
+        }
     }
 
-    // Wait for action to complete, then stop it
+    // Wait for action to complete, but don't stop action - let the next function do it
     ns.print(`Training ${stat} for ${actionTime / 1000} seconds`);
     await ns.sleep(actionTime);
-    ns.singularity.stopAction();
+    // Remove stopAction here - it will be called at the beginning of the next action
 }
 
 /**
@@ -212,10 +227,11 @@ async function trainStat(ns: NS, stat: string): Promise<void> {
  * @param {CrimeType[]} crimeLadder - Current crime ladder
  * @returns {number} - Index of current crime in crimeLadder, or -1 if none meet threshold
  */
-function findCurrentCrimeIndex(ns: NS, crimeLadder: CrimeType[]): number {
+async function findCurrentCrimeIndex(ns: NS, crimeLadder: CrimeType[]): Promise<number> {
     // Start from the end (hardest crime) and work backwards
     for (let i = crimeLadder.length - 1; i >= 0; i--) {
-        if (ns.singularity.getCrimeChance(crimeLadder[i]) >= COMMIT_THRESHOLD) {
+        const crimeChance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crimeLadder[i]}")`);
+        if (crimeChance >= COMMIT_THRESHOLD) {
             return i;
         }
     }
@@ -227,33 +243,30 @@ function findCurrentCrimeIndex(ns: NS, crimeLadder: CrimeType[]): number {
  * @param {NS} ns - Netscript API
  * @param {CrimeType} crime - Crime to commit
  */
-async function commitCrime(ns: NS, crime: CrimeType): Promise<void> {
+async function myCommitCrime(ns: NS, crime: CrimeType): Promise<void> {
     // Ensure player is healthy
     if (ns.getPlayer().hp.current < ns.getPlayer().hp.max) {
-        ns.singularity.hospitalize();
+        await executeCommand(ns, 'ns.singularity.hospitalize()');
     }
 
     // Stop any current action before starting a new one
-    if (ns.singularity.isBusy()) {
-        ns.singularity.stopAction();
-    }
+    await executeCommand(ns, 'ns.singularity.stopAction()');
 
     // Get crime stats for duration
-    const crimeStats = ns.singularity.getCrimeStats(crime);
-    const successRate = ns.singularity.getCrimeChance(crime);
+    const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
+    const successRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
 
     // Display expected profit
     const expectedProfit = (crimeStats.money * successRate) / (crimeStats.time / 1000);
     ns.print(`Committing crime: ${crime} (${formatPercent(successRate)} success rate, $${shortNumber(expectedProfit)}/sec)`);
 
     // Commit the crime
-    ns.singularity.commitCrime(crime, false);
+    await executeCommand(ns, `ns.singularity.commitCrime("${crime}", false)`);
 
-    // Wait for crime to complete
+    // Wait for crime to complete, but don't stop action - let the next function do it
     await ns.sleep(crimeStats.time);
 
-    // Stop action
-    ns.singularity.stopAction();
+    // Remove stopAction here - it will be called at the beginning of the next action
 
     // Display result
     displayStatus(ns, ns.getPlayer());
@@ -266,7 +279,7 @@ async function commitCrime(ns: NS, crime: CrimeType): Promise<void> {
  */
 async function trainForCrime(ns: NS, targetCrime: CrimeType): Promise<void> {
     // Get stats for target crime
-    const crimeStats = ns.singularity.getCrimeStats(targetCrime);
+    const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${targetCrime}")`);
 
     // Get current player stats
     const player = ns.getPlayer();
@@ -276,8 +289,8 @@ async function trainForCrime(ns: NS, targetCrime: CrimeType): Promise<void> {
 
     // Find the most important stat to train
     const statToTrain = statImportance[0].name;
-
-    ns.print(`Training ${statToTrain} for crime: ${targetCrime} (Current success: ${formatPercent(ns.singularity.getCrimeChance(targetCrime))})`);
+    const crimeChance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${targetCrime}")`);
+    ns.print(`Training ${statToTrain} for crime: ${targetCrime} (Current success: ${formatPercent(crimeChance)})`);
 
     // Train the selected stat for multiple cycles
     for (let i = 0; i < TRAINING_MULTIPLIER; i++) {
@@ -332,12 +345,12 @@ function calculateStatImportance(crimeStats: CrimeStats, player: Player): Array<
  * @param {NS} ns - Netscript API
  * @param {Player} player - Player object
  */
-function displayStatus(ns: NS, player: Player): void {
+async function displayStatus(ns: NS, player: Player): Promise<void> {
     const stats = player.skills;
     const karma = ns.heart.break();
 
     // Get current crime ladder
-    const crimeLadder = buildCrimeLadder(ns);
+    const crimeLadder = await buildCrimeLadder(ns);
 
     ns.print('--------------------------------------');
     ns.print(`Money: ${shortNumber(player.money)}`);
@@ -356,8 +369,8 @@ function displayStatus(ns: NS, player: Player): void {
     // Show success rates for crimes in ladder
     ns.print('CRIME LADDER (by success rate):');
     for (const crime of crimeLadder) {
-        const successRate = ns.singularity.getCrimeChance(crime);
-        const crimeStats = ns.singularity.getCrimeStats(crime);
+        const successRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
+        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
         const expectedProfit = (crimeStats.money * successRate) / (crimeStats.time / 1000);
 
         let indicator = '❌';

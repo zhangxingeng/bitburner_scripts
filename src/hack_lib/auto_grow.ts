@@ -104,6 +104,7 @@ export class AutoGrowManager {
         while (iterations < maxIterations) {
             // Check if all auto-grow scripts have finished
             let allPrepared = true;
+            let preparing = 0;
 
             for (const target of targets) {
                 // Skip if already marked prepared
@@ -126,8 +127,13 @@ export class AutoGrowManager {
                 // If auto-grow is still running, wait
                 if (targetProcesses.length > 0) {
                     allPrepared = false;
-                    break;
+                    preparing++;
                 }
+            }
+
+            // Print status every 10 iterations
+            if (iterations % 10 === 0) {
+                this.printPreparationStatus(targets, preparing);
             }
 
             if (allPrepared) { return; }
@@ -138,6 +144,29 @@ export class AutoGrowManager {
         }
 
         this.ns.print('Preparation timed out');
+    }
+
+    /**
+     * Print preparation status in a compact format
+     * @param targets List of target servers
+     * @param preparing Number of targets still being prepared
+     */
+    private printPreparationStatus(targets: string[], preparing: number): void {
+        const totalTargets = targets.length;
+        const prepared = this.preparedServers.size;
+        const remaining = totalTargets - prepared;
+
+        // Build compact stats panel
+        const statsPanel = [
+            '┌─── SERVER PREPARATION ───┐',
+            `│ Total Servers:  ${totalTargets.toString().padEnd(5)} │`,
+            `│ Prepared:       ${prepared.toString().padEnd(5)} │`,
+            `│ In Progress:    ${preparing.toString().padEnd(5)} │`,
+            `│ Remaining:      ${remaining.toString().padEnd(5)} │`,
+            '└────────────────────────┘'
+        ].join('\n');
+
+        this.ns.print(statsPanel);
     }
 
     /**

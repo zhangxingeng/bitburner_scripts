@@ -1,4 +1,7 @@
 import { NS } from '@ns';
 export async function main(ns: NS): Promise<void> {
-    await ns.share();
+    while (true) {
+        await ns.share();
+        await ns.sleep(10); // Small sleep to prevent spinning
+    }
 } 

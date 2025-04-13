@@ -2,6 +2,7 @@ import { NS, Server, Player } from '@ns';
 
 /**
  * Helper class for formula calculations with fallbacks if Formulas.exe isn't available
+ * Converted from the original hack/bat/formulas.js implementation
  */
 export class FormulaHelper {
     private ns: NS;
@@ -48,7 +49,7 @@ export class FormulaHelper {
      * Calculate grow threads needed to reach max money
      * @param server Server object
      * @param player Player object
-     * @param hackThreads Number of hack threads
+     * @param hackThreads Number of hack threads (for without-formula calculation)
      * @returns Number of grow threads needed
      */
     getGrowThreads(server: Server, player: Player, hackThreads: number): number {
@@ -56,16 +57,16 @@ export class FormulaHelper {
             return Math.ceil(this.ns.formulas.hacking.growThreads(
                 server,
                 player,
-                server.moneyMax || 0,  // Default to 0 if undefined
+                server.moneyMax || 0,
                 1 // Cores
             ));
         } else {
             const hackPercent = this.ns.hackAnalyze(server.hostname);
-            const availableMoney = server.moneyAvailable || 0;  // Default to 0 if undefined
+            const availableMoney = server.moneyAvailable || 0;
             const hackMoney = hackPercent * availableMoney * hackThreads;
-            const moneyAfterHack = availableMoney - hackMoney;
-            const maxMoney = server.moneyMax || 1;  // Default to 1 if undefined
-            const multiplier = maxMoney / Math.max(1, moneyAfterHack);
+            const moneyAfterHack = Math.max(1, availableMoney - hackMoney);
+            const maxMoney = server.moneyMax || 1;
+            const multiplier = maxMoney / moneyAfterHack;
 
             return Math.ceil(this.ns.growthAnalyze(server.hostname, multiplier));
         }

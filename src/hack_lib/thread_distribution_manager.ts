@@ -57,7 +57,7 @@ export interface ScheduledOperation {
     /** End time (timestamp, 0 for dynamic end) */
     endTime: number;
     /** Additional args for the script */
-    additionalArgs?: any[];
+    additionalArgs?: (string | number | boolean)[];
     /** Whether the operation manipulates stock */
     manipulateStock?: boolean;
     /** Whether to run in silent mode */
@@ -414,6 +414,21 @@ export class ThreadDistributionManager {
             freeRam: ramManager.getFreeRam(server)
         }));
 
+        // Filter out servers with no free RAM
+        const usableServers = servers.filter(s => s.freeRam > 0);
+
+        if (usableServers.length === 0) {
+            if (this.config.debug) {
+                this.ns.print(`No servers with free RAM for operation ${operation.id}`);
+            }
+            return {
+                success: false,
+                pids: [],
+                ramUsed: 0,
+                operation
+            };
+        }
+
         // Prepare arguments for the script
         const args = [
             operation.target,
@@ -425,12 +440,12 @@ export class ThreadDistributionManager {
             ...(operation.additionalArgs || [])
         ];
 
-        // Distribute threads across servers
+        // Distribute threads across servers using the utility function
         const success = distributeThreads(
             this.ns,
             operation.script,
             operation.threads,
-            servers,
+            usableServers,
             ...args
         );
 
@@ -441,12 +456,15 @@ export class ThreadDistributionManager {
 
             // The distributeThreads function already used the RAM from the servers array
             // Calculate how much RAM was used on each server
-            for (const server of servers) {
+            for (const server of usableServers) {
                 const originalFreeRam = ramManager.getFreeRam(server.host);
                 const ramUsedOnServer = originalFreeRam - server.freeRam;
 
                 if (ramUsedOnServer > 0) {
-                    ramManager.reserveRam(ramUsedOnServer, server.host);
+                    const reserveSuccess = ramManager.reserveRam(ramUsedOnServer, server.host);
+                    if (!reserveSuccess && this.config.debug) {
+                        this.ns.print(`Warning: Failed to properly reserve ${ramUsedOnServer}GB on ${server.host}`);
+                    }
                     ramUsed += ramUsedOnServer;
                 }
             }
@@ -565,25 +583,29 @@ export class ThreadDistributionManager {
         const scheduled = this.getScheduledOperations();
         const active = this.getActiveOperations();
 
-        this.ns.tprint('===== THREAD DISTRIBUTION STATUS =====');
-        this.ns.tprint(`Scheduled operations: ${scheduled.length}`);
-        this.ns.tprint(`Active operations: ${active.length}`);
-
         // Group operations by type
         const hackOps = scheduled.filter(op => op.script === this.scripts.hack.path);
         const growOps = scheduled.filter(op => op.script === this.scripts.grow.path);
         const weakenOps = scheduled.filter(op => op.script === this.scripts.weaken.path);
         const shareOps = scheduled.filter(op => op.script === this.scripts.share.path);
 
-        this.ns.tprint(`Scheduled hacks: ${hackOps.length}`);
-        this.ns.tprint(`Scheduled grows: ${growOps.length}`);
-        this.ns.tprint(`Scheduled weakens: ${weakenOps.length}`);
-        this.ns.tprint(`Scheduled shares: ${shareOps.length}`);
-
         // Count batch operations
         const batchOps = scheduled.filter(op => op.batchId !== undefined);
         const uniqueBatches = new Set(batchOps.map(op => op.batchId));
 
-        this.ns.tprint(`Batch operations: ${batchOps.length} in ${uniqueBatches.size} batches`);
+        // Create compact stats panel
+        const statsPanel = [
+            '┌─── THREAD DISTRIBUTION ───┐',
+            `│ Scheduled Ops: ${scheduled.length.toString().padEnd(10)} │`,
+            `│ Active Ops:    ${active.length.toString().padEnd(10)} │`,
+            `│ Hack Ops:      ${hackOps.length.toString().padEnd(10)} │`,
+            `│ Grow Ops:      ${growOps.length.toString().padEnd(10)} │`,
+            `│ Weaken Ops:    ${weakenOps.length.toString().padEnd(10)} │`,
+            `│ Share Ops:     ${shareOps.length.toString().padEnd(10)} │`,
+            `│ Batch Ops:     ${batchOps.length}/${uniqueBatches.size.toString().padEnd(6)} │`,
+            '└──────────────────────────┘'
+        ].join('\n');
+
+        this.ns.print(statsPanel);
     }
 }

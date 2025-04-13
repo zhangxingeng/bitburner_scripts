@@ -42,6 +42,8 @@ export class HackingConfig {
     readonly batchConfig = {
         /** Time between operations within a batch in ms */
         stepTime: 20,
+        /** Gap between batches (typically stepTime * 4) */
+        batchGap: 80,
         /** Maximum parallel batches per target */
         maxConcurrency: -1,
         /** Maximum hack threads per batch, -1 for auto */
@@ -65,11 +67,11 @@ export class HackingConfig {
         /** Whether to use home RAM */
         useHomeRam: true,
         /** Percentage of home RAM to reserve */
-        homeRamReserve: 0.15,
+        homeRamReservePercent: 0.25,
         /** Maximum home RAM to reserve in GB */
-        maxHomeReserve: 256,
+        maxHomeReserve: 128,
         /** Minimum home RAM to reserve in GB */
-        minHomeReserve: 64,
+        minHomeReserve: 100,
         /** Minimum server RAM required to use */
         minServerRam: 2
     };
@@ -80,18 +82,24 @@ export class HackingConfig {
         baseSleepTime: 1000,
         /** Whether to print detailed debug logs */
         debug: false,
+        /** Whether to avoid printing toast messages for misfires */
+        silentMisfires: true,
         /** Interval (in ticks) between status updates */
         statusUpdateInterval: 30,
         /** Interval (in ticks) between RAM and target updates */
-        refreshInterval: 10
+        refreshInterval: 10,
+        /** Interval (in seconds) to re-scan and nuke servers */
+        nukeInterval: 50
     };
 
     // Targeting configuration
     readonly targetingConfig = {
         /** Maximum number of targets to hack simultaneously */
         maxTargets: 4,
-        /** Interval (in ticks) to re-scan and nuke servers */
-        nukeInterval: 50
+        /** Money threshold (0-1) for considering a server prepared */
+        moneyThreshold: 0.9,
+        /** Security threshold for considering a server prepared */
+        securityThreshold: 3
     };
 
     /**
@@ -114,15 +122,42 @@ export class HackingConfig {
         return {
             security: {
                 /** Target security level above minimum to tolerate */
-                threshold: 3,
+                threshold: this.targetingConfig.securityThreshold,
                 /** Security decrease per weaken thread */
                 weakenAmount: this.securityConstants.weakenSecurityDecrease
             },
             money: {
                 /** Target money percentage */
-                threshold: 0.9
+                threshold: this.targetingConfig.moneyThreshold
             },
             debug: this.executionConfig.debug
         };
+    }
+
+    /**
+     * Get actual home RAM reservation based on configured percentages and limits
+     */
+    getHomeRamReservation(ns: NS): number {
+        const homeMaxRam = ns.getServerMaxRam('home');
+        // Calculate based on percentage with min/max constraints
+        return Math.max(
+            Math.min(
+                homeMaxRam * this.ramConfig.homeRamReservePercent,
+                this.ramConfig.maxHomeReserve
+            ),
+            this.ramConfig.minHomeReserve
+        );
+    }
+
+    /**
+     * Check if home RAM reservation is being violated
+     */
+    isHomeRamReservationViolated(ns: NS): boolean {
+        const homeMaxRam = ns.getServerMaxRam('home');
+        const homeUsedRam = ns.getServerUsedRam('home');
+        const homeFreeRam = homeMaxRam - homeUsedRam;
+        const homeReserved = this.getHomeRamReservation(ns);
+
+        return homeFreeRam < homeReserved;
     }
 }

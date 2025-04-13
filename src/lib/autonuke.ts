@@ -15,14 +15,9 @@ export async function main(ns: NS) {
 
     // ns.tprint(`nuking ${host}, ports: ${ports}`)
     for (let i = 0; i < ports; ++i) {
-        if (!ns.fileExists(files[i])) {
-            ns.tprint(`Required file not exist: ${files[i]}`);
-            ns.exit();
-        }
-
+        if (!ns.fileExists(files[i])) { continue; }
         means[i](host);
     }
+    try { ns.nuke(host); } catch (e) {/*pass*/ }
 
-    ns.nuke(host);
-    // ns.tprint("Nuke succeeded on ", host);
 }
