@@ -1,7 +1,5 @@
 import type { NS } from '@ns';
-import { formatMoney } from '../lib/format';
 import { execMulti } from '../engine/exec_multi';
-import { FormulaHelper } from '../engine/formulas';
 import { HackingConfig } from '../engine/config';
 import { RamManager } from '../engine/ram_manager';
 import { ServerTargetManager } from '../engine/server_manager';
@@ -12,7 +10,6 @@ import {
     getTargetServers,
     isServerPrepared,
     formatRamStatusPanel,
-    formatBatchInfoPanel,
 } from '../engine/batch_util';
 
 // ── Orchestrator-level config (engine/HackingConfig covers the HWGW layer) ──
@@ -24,6 +21,8 @@ const PATHS = {
     scanNuke: '/tools/scan_nuke.js',
     autoGrow: '/deploy/auto_grow.js',
     share: '/deploy/share.js',
+    gameAgent: '/monitor/game_agent.js',       // File-based MCP command relay (for Claude)
+    bootAgent: '/monitor/boot_agent.js',       // Port-based IPC command relay (for strategy agent)
 } as const;
 
 const INTERVALS = {
@@ -144,7 +143,7 @@ export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
     ns.enableLog('print');
 
-    // Parse CLI args for home RAM override
+    // Parse CLI args for home RAM override (strategy agent passes --homeRam)
     const args = ns.flags([['homeRam', 0]]);
     const homeRamOverride = Number(args.homeRam);
 
@@ -155,7 +154,6 @@ export async function main(ns: NS): Promise<void> {
     }
     const ramManager = new RamManager(ns, config);
     const targetManager = new ServerTargetManager(ns, config);
-    const formulas = new FormulaHelper(ns);
 
     const scripts = {
         hack: { path: config.scriptPaths.hack, ram: config.scriptRamCost },
@@ -172,8 +170,14 @@ export async function main(ns: NS): Promise<void> {
 
     const batchManager = new BatchHackManager(ns, config, threadManager);
 
-    // Seed with initial nuke
+    // Seed with initial nuke + launch daemon agents
     await nukeAll(ns);
+    if (!ns.isRunning(PATHS.gameAgent, 'home')) {
+        ns.exec(PATHS.gameAgent, 'home', 1);
+    }
+    if (!ns.isRunning(PATHS.bootAgent, 'home')) {
+        ns.exec(PATHS.bootAgent, 'home', 1);
+    }
     lastNukeTime = Date.now();
     ns.print('Advanced Batch Hacking System started');
 

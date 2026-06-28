@@ -9,6 +9,13 @@ declare module '@ns' {
         deleteServer(host: string): boolean;
         formatNumber(n: number, fmt?: string): string;
     }
+
+    interface Player {
+        /** Money earned per second from current work action (crime, job, study). 0 if idle/hacking. */
+        workMoneyGainRate?: number;
+        /** Reputation earned per second from current work action. */
+        workRepGainRate?: number;
+    }
 }
 
 export {};

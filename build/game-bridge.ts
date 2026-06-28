@@ -7,6 +7,7 @@
 
 import { WebSocketServer, type WebSocket } from "ws";
 import chokidar from "chokidar";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -95,6 +96,97 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
+// ── Sync engine ──
+
+/** Fetch all files + their content from a game server via the remote API. */
+async function getAllFiles(server: string = "home"): Promise<Array<{ filename: string; content: string }>> {
+  return (await rpc("getAllFiles", { server })) as Array<{ filename: string; content: string }>;
+}
+
+/** Compute an MD5 hash of file content for comparison. */
+function hashContent(content: string): string {
+  return crypto.createHash("md5").update(content, "utf-8").digest("hex");
+}
+
+/** Read a local dist/ file and return its content + hash, or null if it doesn't exist. */
+function readLocalFile(relativePath: string): { content: string; hash: string } | null {
+  const fullPath = path.join(dist, relativePath);
+  try {
+    const content = fs.readFileSync(fullPath, "utf-8");
+    return { content, hash: hashContent(content) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * On game connect: compare local dist/ files against remote files and push
+ * any that are missing or have different content.  Uses hash comparison so
+ * only genuinely changed files are transferred.
+ */
+async function syncFilesOnConnect() {
+  try {
+    log("SYNC", "Running initial file sync…");
+
+    // 1. Fetch remote files + content from the game
+    const remoteFiles = await getAllFiles("home");
+    const remoteHashes = new Map<string, string>();
+    for (const f of remoteFiles) {
+      remoteHashes.set(f.filename, hashContent(f.content));
+    }
+
+    // 2. Walk local dist/ and compare
+    const localFiles = walkDist();
+    let pushed = 0;
+    let skipped = 0;
+    let errors = 0;
+
+    for (const localPath of localFiles) {
+      const relative = path.relative(dist, localPath).replace(/\\/g, "/");
+      const remotePath = `/${relative}`;
+
+      const localInfo = readLocalFile(relative);
+      if (!localInfo) {
+        errors++;
+        continue;
+      }
+
+      const remoteHash = remoteHashes.get(remotePath);
+      if (remoteHash === localInfo.hash) {
+        skipped++;
+        continue; // Already in sync
+      }
+
+      // Content differs or file is missing remotely — push it
+      await pushFile(localPath);
+      pushed++;
+      await sleep(10);
+    }
+
+    // 3. Optionally delete remote files that no longer exist locally
+    // (skipped — too aggressive for a general sync; the watcher handles deletes)
+
+    log("SYNC", `Sync complete — ${pushed} pushed, ${skipped} up-to-date${errors > 0 ? `, ${errors} errors` : ""}`);
+
+    // 4. Update typedefs while we're here
+    try {
+      const defs = (await rpc("getDefinitionFile")) as string;
+      fs.writeFileSync("NetscriptDefinitions.d.ts", defs);
+      log("SYNC", "NetscriptDefinitions.d.ts updated");
+    } catch { /* retry on next connect */ }
+
+    // 5. Clear any pending syncs that accumulated during the sync
+    if (pendingSync.size > 0) {
+      log("SYNC", `Clearing ${pendingSync.size} stale pending sync entries (covered by comparison sync)`);
+      pendingSync.clear();
+    }
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log("ERR", `Initial sync failed: ${msg}`);
+  }
+}
+
 /** Handle an incoming message from the game (JSON-RPC response). */
 function handleGameMessage(raw: string) {
   try {
@@ -135,7 +227,6 @@ function startFileWatcher() {
   const watcher = chokidar.watch(`${dist}/**/*`, {
     ignored: /(^|[\\/])\\./,
     persistent: true,
-    ignoreInitial: true,
   });
 
   watcher.on("change", async (p: string) => {
@@ -210,6 +301,10 @@ function startRepl() {
           await pushAllFiles();
           break;
         }
+        case "sync": {
+          await syncFilesOnConnect();
+          break;
+        }
         case "raw": {
           const method = args[0];
           const paramsStr = args.slice(1).join(" ");
@@ -235,6 +330,7 @@ function startRepl() {
   ram <file> [host]    — calculate RAM usage of a script
   save [path]          — download save file
   pushall              — push all dist/ files to game
+  sync                 — run comparison-based file sync
   raw <method> [json]  — send raw JSON-RPC
   status               — connection status
   help                 — this message
@@ -278,22 +374,9 @@ wss.on("connection", (socket: WebSocket) => {
     gameSocket = null;
   });
 
-  // Request typedefs + flush pending syncs after connection settles
+  // Sync files and update typedefs after connection settles
   setTimeout(async () => {
-    try {
-      const defs = await rpc("getDefinitionFile") as string;
-      fs.writeFileSync("NetscriptDefinitions.d.ts", defs);
-      log("SYNC", "NetscriptDefinitions.d.ts updated");
-    } catch { /* retry on next connect */ }
-
-    if (pendingSync.size > 0) {
-      log("SYNC", `Flushing ${pendingSync.size} pending files…`);
-      for (const p of pendingSync) {
-        await pushFile(p);
-        await sleep(10);
-      }
-      pendingSync.clear();
-    }
+    await syncFilesOnConnect();
   }, 500);
 });
 

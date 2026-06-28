@@ -1,4 +1,5 @@
 node_modules/
 dist/
 NetscriptDefinitions.d.ts
-bitburner-src 
+bitburner-src
+example_code_dump

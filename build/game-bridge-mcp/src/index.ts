@@ -405,11 +405,19 @@ server.registerTool(
     },
   },
   async () => {
-    const connected = ws?.readyState === WebSocket.OPEN;
+    // Try to connect if not already connected
+    let connected = ws?.readyState === WebSocket.OPEN;
+    if (!connected) {
+      try {
+        await ensureConnected();
+        connected = true;
+      } catch {
+        connected = false;
+      }
+    }
     let gameConnected = false;
     if (connected) {
       try {
-        // Quick ping: try to list home server files
         await rpc("getFileNames", { server: "home" });
         gameConnected = true;
       } catch {
@@ -431,12 +439,191 @@ server.registerTool(
   }
 );
 
+// Tool: get_monitoring
+server.registerTool(
+  "get_monitoring",
+  {
+    title: "Get Game Monitoring Snapshot",
+    description: `Read all monitoring data (player, RAM, processes, decisions, heartbeat) in one call.
+
+Returns a unified snapshot of the game state including:
+- Player stats (hacking, money, income, skills)
+- RAM usage across all servers (totals + per-server)
+- Running processes (all scripts on all rooted servers)
+- Strategy decisions log (history of phase transitions and actions)
+- Heartbeat status (whether strategy agent is alive)
+
+This is the primary monitoring tool — use it to observe game state during testing.`,
+    inputSchema: z.object({}).strict(),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  async () => {
+    await ensureConnected();
+
+    const result: Record<string, unknown> = {};
+
+    // Helper to safely read and parse a JSON file from home
+    const readStatusFile = async (path: string) => {
+      try {
+        const data = (await rpc("getFile", { server: "home", filename: path })) as string;
+        if (data && typeof data === "string" && data.trim()) {
+          return JSON.parse(data);
+        }
+      } catch { /* file missing is OK */ }
+      return null;
+    };
+
+    // Read all status files in parallel
+    const [player, ram, processes, decisions, heartbeat] = await Promise.all([
+      readStatusFile("status/player.txt"),
+      readStatusFile("status/ram.txt"),
+      readStatusFile("status/processes.txt"),
+      readStatusFile("status/decisions.json"),
+      readStatusFile("status/heartbeat.txt"),
+    ]);
+
+    result.player = player;
+    result.ram = ram;
+    result.processes = processes;
+    result.decisions = decisions;
+    result.heartbeat = heartbeat;
+    result.snapshot_ts = Date.now();
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  }
+);
+
+// Tool: read_port
+const ReadPortSchema = z.object({
+  port: z.number().int().min(1).max(20).describe("Port number to read from (1-20)"),
+  peek: z.boolean().optional().default(false).describe("If true, peek (don't consume). Default: false (consuming read)"),
+}).strict();
+
+server.registerTool(
+  "read_port",
+  {
+    title: "Read Bitburner Game Port",
+    description: `Read data from a game port via the game_agent command relay.
+
+Ports are used for in-game IPC:
+- Port 1: Boot agent commands
+- Port 2: Boot agent results
+- Port 3: Strategy agent heartbeat
+- Port 4: Strategy agent decision log
+
+Uses the game_agent file-based command relay. May take 1-5 seconds.`,
+    inputSchema: ReadPortSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async ({ port, peek }) => {
+    await ensureConnected();
+
+    // Send command via game_agent relay
+    const cmd = { id: `readPort_${Date.now()}`, method: peek ? "peekPort" : "readPort", port };
+    await rpc("pushFile", { server: "home", filename: "status/.cmd.json", content: JSON.stringify(cmd) });
+
+    // Poll for result (up to 5 seconds)
+    let result = null;
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        const raw = (await rpc("getFile", { server: "home", filename: "status/.result.json" })) as string;
+        if (raw && typeof raw === "string") {
+          const parsed = JSON.parse(raw);
+          if (parsed.id === cmd.id) {
+            result = parsed;
+            break;
+          }
+        }
+      } catch { /* keep polling */ }
+    }
+
+    if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  }
+);
+
+// Tool: write_port
+const WritePortSchema = z.object({
+  port: z.number().int().min(1).max(20).describe("Port number to write to (1-20)"),
+  data: z.string().describe("Data to write to the port (string or JSON string)"),
+}).strict();
+
+server.registerTool(
+  "write_port",
+  {
+    title: "Write to Bitburner Game Port",
+    description: `Write data to a game port via the game_agent command relay.
+
+Use this to send commands to the boot agent on port 1, or write data to any port for in-game scripts to consume.`,
+    inputSchema: WritePortSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async ({ port, data }) => {
+    await ensureConnected();
+
+    const cmd = { id: `writePort_${Date.now()}`, method: "writePort", port, data };
+    await rpc("pushFile", { server: "home", filename: "status/.cmd.json", content: JSON.stringify(cmd) });
+
+    // Poll for result
+    let result = null;
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        const raw = (await rpc("getFile", { server: "home", filename: "status/.result.json" })) as string;
+        if (raw && typeof raw === "string") {
+          const parsed = JSON.parse(raw);
+          if (parsed.id === cmd.id) {
+            result = parsed;
+            break;
+          }
+        }
+      } catch { /* keep polling */ }
+    }
+
+    if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      structuredContent: result,
+    };
+  }
+);
+
 // ── Main ──
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("[mcp] Bitburner MCP server running via stdio");
+
+  // Eagerly connect to the bridge so tools work immediately
+  try {
+    await connect();
+    console.error("[mcp] Bridge connection established on startup");
+  } catch (err) {
+    console.error("[mcp] Bridge not available at startup — will retry on first tool use");
+  }
 }
 
 main().catch((err) => {
