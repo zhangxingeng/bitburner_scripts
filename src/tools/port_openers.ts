@@ -1,6 +1,6 @@
 import { NS } from '@ns';
-import { executeCommand } from './simple_through_file';
-import { isSingleInstance } from '../lib/network';
+import { executeCommand } from '../lib/ns_dodge';
+import { isSingleInstance } from '../lib/servers';
 
 const PORT_OPENER_NAMES: string[] = [
     'tor',

@@ -26,8 +26,7 @@ export async function main(ns: NS): Promise<void> {
         const moneyPercent = currentMoney / maxMoney;
         const securityDiff = currentSecurity - minSecurity;
 
-        // If we're done, exit
-        // Use 90% as the money threshold to match the HackingConfig.getAutoGrowConfig() threshold
+        // Exit when server is prepared (thresholds match TARGET_MONEY_THRESHOLD / TARGET_SECURITY_THRESHOLD in lib/config)
         if (moneyPercent >= 0.9 && securityDiff <= 3) {
             ns.print(`${target} prepared: Money ${ns.formatNumber(currentMoney)}/${ns.formatNumber(maxMoney)}, Security ${currentSecurity.toFixed(2)}/${minSecurity.toFixed(2)}`);
             break;

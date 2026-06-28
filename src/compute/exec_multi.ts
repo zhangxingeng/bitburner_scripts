@@ -2,15 +2,10 @@ import { NS } from '@ns';
 import { ensureScriptExists } from '../lib/script';
 
 /**
- * Execute a script with multiple threads on a target server
- * Converted from the original hack/bat/exec-multi.js implementation
- * 
- * @param ns NS object 
- * @param host Host to run script on
- * @param threads Number of threads to run
- * @param scriptPath Path to the script
- * @param args Script arguments
- * @returns Process ID of the executed script
+ * Execute a script with multiple threads on a host server.
+ * Moved from engine/exec_multi.ts.
+ *
+ * Automatically adjusts thread count if the host has insufficient RAM.
  */
 export function execMulti(
     ns: NS,
@@ -19,7 +14,6 @@ export function execMulti(
     scriptPath: string,
     ...args: (string | number | boolean)[]
 ): number {
-    // Validate inputs
     if (!ns.serverExists(host)) {
         ns.print(`Host does not exist: ${host}`);
         return 0;
@@ -30,48 +24,28 @@ export function execMulti(
         return 0;
     }
 
-    // Make sure we have enough RAM
     const scriptRam = ns.getScriptRam(scriptPath);
     const availableRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
     const maxThreads = Math.floor(availableRam / scriptRam);
 
-    if (maxThreads < 1) {
-        // Only print RAM errors in debug mode or if it's an unusual case
-        const debug = false; // Set this to true to see all RAM errors
-        if (debug) {
-            ns.print(`Not enough RAM on ${host} to run ${scriptPath}`);
-        }
-        return 0;
-    }
+    if (maxThreads < 1) return 0;
 
-    // Adjust threads if needed
     const actualThreads = Math.min(threads, maxThreads);
-    if (actualThreads < 1) {
-        return 0;
-    }
+    if (actualThreads < 1) return 0;
 
-    // Copy script to target host if needed
+    // Copy script to remote host if not already present
     if (host !== 'home' && !ns.fileExists(scriptPath, host)) {
-        const copied = ns.scp(scriptPath, host, 'home');
-        if (!copied) {
+        if (!ns.scp(scriptPath, host, 'home')) {
             ns.print(`Failed to copy ${scriptPath} to ${host}`);
             return 0;
         }
     }
 
-    // Execute script
     return ns.exec(scriptPath, host, actualThreads, ...args);
 }
 
 /**
- * Auto-kill and restart a script with multiple threads
- * 
- * @param ns NS object
- * @param host Host to run script on
- * @param threads Number of threads to run
- * @param scriptPath Path to the script
- * @param args Script arguments
- * @returns Process ID of the executed script
+ * Kill any existing instance of a script on a host, then restart it.
  */
 export function execMultiAutoKill(
     ns: NS,
@@ -80,25 +54,15 @@ export function execMultiAutoKill(
     scriptPath: string,
     ...args: (string | number | boolean)[]
 ): number {
-    // Kill existing instances
     if (ns.scriptRunning(scriptPath, host)) {
         ns.scriptKill(scriptPath, host);
     }
-
-    // Execute the script
     return execMulti(ns, host, threads, scriptPath, ...args);
 }
 
 /**
- * Distribute script execution across multiple servers
- * 
- * @param ns NS object
- * @param scriptPath Path to the script
- * @param totalThreads Total threads needed
- * @param serverAllocation Thread allocation map (server index -> thread count)
- * @param serverList List of servers (index corresponds to allocation map)
- * @param args Script arguments
- * @returns Total number of threads successfully executed
+ * Distribute script execution across multiple servers according to a per-server thread allocation.
+ * Returns the total number of threads successfully executed.
  */
 export function distributeExecution(
     ns: NS,
@@ -111,38 +75,24 @@ export function distributeExecution(
     if (totalThreads <= 0) return 0;
 
     let executedThreads = 0;
-
-    // Execute on each server according to allocation
     for (let i = 0; i < serverAllocation.length; i++) {
         const threads = serverAllocation[i];
         if (threads <= 0) continue;
 
         const server = serverList[i];
-
-        // Copy script if needed
         ensureScriptExists(ns, scriptPath, server);
 
-        // Execute the script
         const pid = execMulti(ns, server, threads, scriptPath, ...args);
-
         if (pid > 0) {
             executedThreads += threads;
         }
     }
-
     return executedThreads;
 }
 
-/**
- * Get maximum threads for a script on a server
- * 
- * @param ns NS object
- * @param host Host to check
- * @param scriptPath Path to the script
- * @returns Maximum number of threads possible
- */
+/** Maximum threads a script can run on a server given its current free RAM. */
 export function getMaxThreads(ns: NS, host: string, scriptPath: string): number {
     const scriptRam = ns.getScriptRam(scriptPath);
     const freeRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
     return Math.floor(freeRam / scriptRam);
-} 
+}

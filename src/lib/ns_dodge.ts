@@ -29,10 +29,13 @@ function jsonReviver(key: string, value: unknown): unknown {
 }
 
 /**
- * Execute an NS command by running it in a temp script and getting the result
- * @param {NS} ns - The NS instance
- * @param {string} command - The NS command to execute (e.g. "ns.getServerMaxRam('home')")
- * @returns {Promise<T>} Result of the command
+ * Execute an NS command by running it in a temp script and getting the result.
+ * This is the RAM-dodge primitive (equivalent to alainbryden's getNsDataThroughFile).
+ * Use it to call Singularity APIs from scripts that cannot afford their RAM cost directly.
+ *
+ * @param ns      The NS instance
+ * @param command The NS command to execute (e.g. "ns.singularity.getUpgradeHomeRamCost()")
+ * @returns       Result of the command
  */
 export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
     const outputFile = `/tmp/${Date.now()}.txt`;
@@ -49,9 +52,9 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
                     if (Number.isNaN(value)) return { $type: 'number', $value: 'NaN' };
                     return value;
                 }
-                
+
                 const result = ${command};
-                
+
                 // Handle void/undefined results explicitly
                 if (result === undefined) {
                     await ns.write("${outputFile}", "SUCCESS:VOID", "w");
@@ -65,10 +68,10 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
                 const maxRam = ns.getServerMaxRam('home');
                 const usedRam = ns.getServerUsedRam('home');
                 const availableRam = maxRam - usedRam;
-                
+
                 // Print RAM info directly to terminal
                 ns.tprint(\`RAM info: Function ${funcName} costs \${ramCost}GB. Available RAM: \${availableRam}GB\`);
-                
+
                 // Still write error to file so main script knows it failed
                 await ns.write("${outputFile}", "ERROR: " + String(err), "w");
             }
@@ -116,8 +119,8 @@ export async function executeCommand<T>(ns: NS, command: string): Promise<T> {
 
 /**
  * Parses a string back into its original type
- * @param {string} fileContent - The string to parse
- * @returns {T} The parsed object
+ * @param fileContent The string to parse
+ * @returns The parsed object
  */
 function parseToType<T>(fileContent: string): T {
     if (!fileContent) return undefined as unknown as T;

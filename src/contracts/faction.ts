@@ -1,6 +1,6 @@
 import { NS, FactionWorkType } from '@ns';
 import { formatTime, shortNumber } from '../lib/format';
-import { executeCommand } from '../tools/simple_through_file';
+import { executeCommand } from '../lib/ns_dodge';
 
 // Constants
 const STATUS_UPDATE_INTERVAL = 5000; // 5 seconds for status updates

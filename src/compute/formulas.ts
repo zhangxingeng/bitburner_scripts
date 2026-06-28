@@ -1,28 +1,19 @@
 import { NS, Server, Player } from '@ns';
 
 /**
- * Helper class for formula calculations with fallbacks if Formulas.exe isn't available
- * Converted from the original hack/bat/formulas.js implementation
+ * Helper class for formula calculations with fallbacks if Formulas.exe isn't available.
+ * Moved from engine/formulas.ts.
  */
 export class FormulaHelper {
     private ns: NS;
     private hasFormulasExe: boolean;
 
-    /**
-     * Create a new FormulaHelper
-     * @param ns NetScript API
-     */
     constructor(ns: NS) {
         this.ns = ns;
         this.hasFormulasExe = ns.fileExists('Formulas.exe', 'home');
     }
 
-    /**
-     * Calculate the hack percent (0-1) for a server
-     * @param server Server object
-     * @param player Player object
-     * @returns Hack percent (0-1)
-     */
+    /** Calculate the hack percent (0-1) for a server. */
     getHackPercent(server: Server, player: Player): number {
         if (this.hasFormulasExe) {
             return this.ns.formulas.hacking.hackPercent(server, player);
@@ -31,12 +22,7 @@ export class FormulaHelper {
         }
     }
 
-    /**
-     * Calculate the hack chance (0-1) for a server
-     * @param server Server object
-     * @param player Player object
-     * @returns Hack chance (0-1)
-     */
+    /** Calculate the hack chance (0-1) for a server. */
     getHackChance(server: Server, player: Player): number {
         if (this.hasFormulasExe) {
             return this.ns.formulas.hacking.hackChance(server, player);
@@ -46,11 +32,8 @@ export class FormulaHelper {
     }
 
     /**
-     * Calculate grow threads needed to reach max money
-     * @param server Server object
-     * @param player Player object
-     * @param hackThreads Number of hack threads (for without-formula calculation)
-     * @returns Number of grow threads needed
+     * Calculate grow threads needed to reach max money.
+     * @param hackThreads Number of hack threads (used in fallback calculation).
      */
     getGrowThreads(server: Server, player: Player, hackThreads: number): number {
         if (this.hasFormulasExe) {
@@ -67,17 +50,11 @@ export class FormulaHelper {
             const moneyAfterHack = Math.max(1, availableMoney - hackMoney);
             const maxMoney = server.moneyMax || 1;
             const multiplier = maxMoney / moneyAfterHack;
-
             return Math.ceil(this.ns.growthAnalyze(server.hostname, multiplier));
         }
     }
 
-    /**
-     * Get weaken execution time
-     * @param server Server object
-     * @param player Player object
-     * @returns Weaken time in milliseconds
-     */
+    /** Get weaken execution time in milliseconds. */
     getWeakenTime(server: Server, player: Player): number {
         if (this.hasFormulasExe) {
             return this.ns.formulas.hacking.weakenTime(server, player);
@@ -86,12 +63,7 @@ export class FormulaHelper {
         }
     }
 
-    /**
-     * Get hack execution time
-     * @param server Server object
-     * @param player Player object
-     * @returns Hack time in milliseconds
-     */
+    /** Get hack execution time in milliseconds. */
     getHackTime(server: Server, player: Player): number {
         if (this.hasFormulasExe) {
             return this.ns.formulas.hacking.hackTime(server, player);
@@ -100,12 +72,7 @@ export class FormulaHelper {
         }
     }
 
-    /**
-     * Get grow execution time
-     * @param server Server object
-     * @param player Player object
-     * @returns Grow time in milliseconds
-     */
+    /** Get grow execution time in milliseconds. */
     getGrowTime(server: Server, player: Player): number {
         if (this.hasFormulasExe) {
             return this.ns.formulas.hacking.growTime(server, player);
@@ -114,15 +81,11 @@ export class FormulaHelper {
         }
     }
 
-    /**
-     * Helper function to get server with optimal settings
-     * @param hostname Server hostname
-     * @returns Server object with max money and min security
-     */
+    /** Return a server object with max money and min security (optimal state for calculations). */
     getOptimalServer(hostname: string): Server {
         const server = this.ns.getServer(hostname);
         server.moneyAvailable = server.moneyMax || 0;
         server.hackDifficulty = server.minDifficulty || 1;
         return server;
     }
-} 
+}

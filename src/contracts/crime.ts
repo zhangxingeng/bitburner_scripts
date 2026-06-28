@@ -1,7 +1,7 @@
 import { NS, Player } from '@ns';
 import { CrimeType, GymType, UniversityClassType, CrimeStats } from '../lib/types';
 import { shortNumber, formatPercent } from '../lib/format';
-import { executeCommand } from '../tools/simple_through_file';
+import { executeCommand } from '../lib/ns_dodge';
 
 
 /** Training multiplier for actions (how many times to train before checking stats) */

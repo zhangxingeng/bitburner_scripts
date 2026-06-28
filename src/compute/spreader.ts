@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { isSingleInstance } from '../lib/network';
+import { isSingleInstance } from '../lib/servers';
 /** @param {NS} ns */
 export async function main(ns: NS) {
     if (!isSingleInstance(ns)) { return; }

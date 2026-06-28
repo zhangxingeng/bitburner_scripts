@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllPaths } from '../lib/network';
+import { findAllPaths } from '../lib/servers';
 import { traverse } from '../lib/connect';
 
 // Important servers that should be backdoored for story progression

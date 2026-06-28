@@ -5,8 +5,8 @@ import { NS } from '@ns';
  * Stripped of BFS target-finding to save ~0.5 GB RAM (no ns.scan, no ns.getServer).
  *
  * Usage:
- *   run /deploy/simple_hack_loop.js n00dles
- *   run /deploy/simple_hack_loop.js foodnstuff --tail
+ *   run /workers/simple_hack_loop.js n00dles
+ *   run /workers/simple_hack_loop.js foodnstuff --tail
  */
 
 export async function main(ns: NS): Promise<void> {
@@ -16,7 +16,6 @@ export async function main(ns: NS): Promise<void> {
         return;
     }
 
-    ns.disableLog('ALL');
     ns.print(`Starting H→W→G→W loop on ${target}`);
 
     // eslint-disable-next-line no-constant-condition

@@ -4,4 +4,4 @@ export async function main(ns: NS): Promise<void> {
         await ns.share();
         await ns.sleep(10); // Small sleep to prevent spinning
     }
-} 
+}

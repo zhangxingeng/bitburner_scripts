@@ -1,5 +1,5 @@
 import type { NS, SourceFileLvl } from '@ns';
-import { findAllPaths } from './network';
+import { findAllPaths } from './servers';
 
 /** Connect through a server path. Throws if any hop fails. */
 export function traverse(ns: NS, path: string[]): boolean {

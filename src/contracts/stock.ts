@@ -3,7 +3,7 @@ import { formatMoney } from '../lib/format';
 import { StockConfig } from '../stock/config';
 import { StockMarket } from '../stock/market';
 import { StockTrader } from '../stock/trader';
-import { isSingleInstance } from '../lib/network';
+import { isSingleInstance } from '../lib/servers';
 
 // For HUD display
 interface HudElement extends HTMLElement {

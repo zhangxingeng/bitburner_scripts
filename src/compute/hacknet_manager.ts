@@ -1,6 +1,10 @@
 import { NS } from '@ns';
-import { isSingleInstance } from '../lib/network';
-// import { formatMoney, formatTime } from '../lib/utils';
+import { isSingleInstance } from '../lib/servers';
+
+// TODO(design): Wire MAX_PAYOFF_TIME to lib/config phase boundaries:
+//   BOOTSTRAP phase → aggressive (1h limit, no cap); MID/LATE → conservative (4h, 1% money cap).
+//   Also: add hash-spending loop (spend-hacknet-hashes pattern) for Reduce_Min_Security /
+//   Increase_Maximum_Money on best hack target after 15 min in aug (alainbryden pattern).
 
 function formatMoney(money: number): string {
     return money.toLocaleString();
@@ -10,7 +14,8 @@ function formatTime(ms: number): string {
     return (ms / 1000).toFixed(2) + 's';
 }
 
-// Constants
+// ROI payoff time limit (seconds). Upgrades are only purchased if their payoff time is below this.
+// TODO(design): derive from lib/config phase — aggressive early-aug, conservative late-aug.
 const MAX_PAYOFF_TIME = 18000; // 5 hours in seconds
 const CONTINUOUS = true; // Set to false to run once
 const INTERVAL = 200; // Rate at which the program purchases upgrades when running continuously
@@ -70,7 +75,7 @@ export async function main(ns: NS): Promise<void> {
             const errorMessage = typeof err === 'string' ? err :
                 err instanceof Error ? err.message :
                     JSON.stringify(err);
-            setStatus(ns, `WARNING: basic_hacknet.ts caught an unexpected error: ${errorMessage}`);
+            setStatus(ns, `WARNING: hacknet_manager.ts caught an unexpected error: ${errorMessage}`);
         }
 
         if (CONTINUOUS) await ns.sleep(INTERVAL);
@@ -130,7 +135,9 @@ function getHacknetMult(ns: NS): number {
 }
 
 /**
- * Main function to find and purchase the best hacknet upgrade
+ * Main function to find and purchase the best hacknet upgrade.
+ * ROI metric: addedProduction / cost (hashes-or-dollars per second per dollar spent).
+ * Buys the upgrade with the best ROI whose payoff time is within MAX_PAYOFF_TIME.
  */
 function upgradeHacknet(ns: NS): number | false {
     // Get current hacknet multiplier
@@ -269,7 +276,9 @@ function upgradeHacknet(ns: NS): number | false {
         }
     }
 
-    // Consider buying a new node
+    // Consider buying a new node.
+    // Use worst existing node production as optimistic proxy ROI (new node costs more to match old node's production,
+    // but scaling makes this roughly correct — alainbryden pattern).
     const newNodeCost = ns.hacknet.getPurchaseNodeCost();
     const maxNodes = ns.hacknet.maxNumNodes();
 
@@ -284,6 +293,7 @@ function upgradeHacknet(ns: NS): number | false {
     }
 
     // Calculate payoff time based on hash dollar value
+    // hashDollarValue: each hash/sec = $250k/s for hacknet servers; raw hashes for traditional nodes
     const hashDollarValue = haveHacknetServers ? 2.5e5 : 1;
     const payoffTimeSeconds = 1 / (hashDollarValue * (shouldBuyNewNode ? newNodePayoff : bestUpgradePayoff));
 
