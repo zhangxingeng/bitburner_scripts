@@ -26,7 +26,7 @@ export async function main(ns: NS): Promise<void> {
     ]);
 
     // if no SWE account, exit
-    if (!ns.stock.hasWSEAccount() || !ns.stock.hasTIXAPIAccess()) { return; }
+    if (!ns.stock.hasWseAccount() || !ns.stock.hasTixApiAccess()) { return; }
 
     // Process liquidate flag
     if (args.l || args.liquidate) {

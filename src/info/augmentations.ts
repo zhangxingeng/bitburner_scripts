@@ -1,4 +1,4 @@
-import { NS } from '@ns';
+import type { NS, FactionName } from '@ns';
 
 const PURCHASE_AUGS = false;
 const PRINT_REMAINING_AUGS = true;
@@ -57,7 +57,7 @@ export async function main(ns: NS): Promise<void> {
             const playerMoney = ns.getServerMoneyAvailable('home');
             const updatedPrice = ns.singularity.getAugmentationPrice(aug);
             if (playerMoney >= updatedPrice) {
-                ns.singularity.purchaseAugmentation(faction, aug);
+                ns.singularity.purchaseAugmentation(faction as FactionName, aug);
             }
         }
         ns.tprint(`${aug.padEnd(40)} | ${ns.formatNumber(ns.singularity.getAugmentationPrice(aug)).padStart(10)} | ${faction}`);
@@ -70,7 +70,7 @@ export async function main(ns: NS): Promise<void> {
         // Print unaffordable augmentations with reason
         for (const [aug, details] of unaffordableAugs) {
             const priceUnaffordable = details.price > player.money;
-            const repUnaffordable = ns.singularity.getFactionRep(details.faction) < details.repReq;
+            const repUnaffordable = ns.singularity.getFactionRep(details.faction as FactionName) < details.repReq;
             ns.tprint(`${aug.padEnd(40)} | ${ns.formatNumber(details.price).padStart(10)} | ${details.faction} | ${priceUnaffordable ? 'PRICE' : ''}${priceUnaffordable && repUnaffordable ? ' & ' : ''}${repUnaffordable ? 'REP' : ''}`);
         }
     }

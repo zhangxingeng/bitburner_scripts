@@ -49,7 +49,7 @@ export class StockTrader {
         let purchased = false;
 
         // WSE Account
-        if (!this.ns.stock.hasWSEAccount() && availableMoney > this.config.apiOptions.wseAccountCost) {
+        if (!this.ns.stock.hasWseAccount() && availableMoney > this.config.apiOptions.wseAccountCost) {
             if (this.ns.stock.purchaseWseAccount()) {
                 this.ns.print(`Purchased WSE account for ${formatMoney(this.config.apiOptions.wseAccountCost)}`);
                 purchased = true;
@@ -57,7 +57,7 @@ export class StockTrader {
         }
 
         // TIX API
-        if (this.ns.stock.hasWSEAccount() && !this.ns.stock.hasTIXAPIAccess() &&
+        if (this.ns.stock.hasWseAccount() && !this.ns.stock.hasTixApiAccess() &&
             availableMoney > this.config.apiOptions.tixApiCost) {
             if (this.ns.stock.purchaseTixApi()) {
                 this.ns.print(`Purchased TIX API for ${formatMoney(this.config.apiOptions.tixApiCost)}`);
@@ -66,7 +66,7 @@ export class StockTrader {
         }
 
         // 4S Market Data
-        if (this.ns.stock.hasTIXAPIAccess() && !this.ns.stock.has4SData() &&
+        if (this.ns.stock.hasTixApiAccess() && !this.ns.stock.has4SData() &&
             availableMoney > this.config.apiOptions.marketDataCost) {
             if (this.ns.stock.purchase4SMarketData()) {
                 this.ns.print(`Purchased 4S Market Data for ${formatMoney(this.config.apiOptions.marketDataCost)}`);
@@ -76,7 +76,7 @@ export class StockTrader {
         }
 
         // 4S Market Data TIX API
-        if (this.ns.stock.has4SData() && !this.ns.stock.has4SDataTIXAPI() &&
+        if (this.ns.stock.has4SData() && !this.ns.stock.has4SDataTixApi() &&
             availableMoney > this.config.apiOptions.marketDataTixApiCost) {
             if (this.ns.stock.purchase4SMarketDataTixApi()) {
                 this.ns.print(`Purchased 4S Market Data TIX API for ${formatMoney(this.config.apiOptions.marketDataTixApiCost)}`);
@@ -95,7 +95,7 @@ export class StockTrader {
      * @returns Whether 4S API was purchased
      */
     async tryGet4SApi(playerStats: Player, corpus: number, reserve: number = 0): Promise<boolean> {
-        if (this.ns.stock.has4SDataTIXAPI()) return false;
+        if (this.ns.stock.has4SDataTixApi()) return false;
 
         const has4S = this.ns.stock.has4SData();
         const cost4sData = this.config.apiOptions.marketDataCost;

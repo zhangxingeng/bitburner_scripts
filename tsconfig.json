@@ -4,6 +4,8 @@
     ],
     "exclude": [
         "src/lib/react.ts",
+        "src/experiment.tsx",
+        "src/archive",
         "NetscriptDefinitions.d.ts",
     ],
     "compilerOptions": {
