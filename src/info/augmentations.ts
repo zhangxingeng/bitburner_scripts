@@ -14,8 +14,8 @@ export async function main(ns: NS): Promise<void> {
 
     // First pass: collect all unique augmentations and check if they're affordable
     for (const faction of joinedFactions) {
-        const factionRep = ns.singularity.getFactionRep(faction);
-        const augNames = ns.singularity.getAugmentationsFromFaction(faction);
+        const factionRep = ns.singularity.getFactionRep(faction as FactionName);
+        const augNames = ns.singularity.getAugmentationsFromFaction(faction as FactionName);
 
         for (const aug of augNames) {
             if (ownedAugs.has(aug)) continue;
