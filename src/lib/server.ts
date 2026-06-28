@@ -7,8 +7,17 @@ export function calculateServerValue(ns: NS, target: string): number {
     const minSecurity = ns.getServerMinSecurityLevel(target);
     const hackChance = ns.hackAnalyzeChance(target);
     const hackTime = ns.getHackTime(target);
+    const growthFactor = ns.getServerGrowth(target);
 
-    return maxMoney * (1 / (minSecurity + 1)) * (1 / (hackTime / 1000 + 1)) * hackChance;
+    // Calculate a balanced score based on multiple factors
+    const moneyScore = maxMoney;
+    const securityScore = 1 / (minSecurity + 1); // Lower security is better
+    const timeScore = 1 / (hackTime / 1000 + 1); // Faster hack time is better
+    const chanceScore = hackChance;
+    const growthScore = growthFactor / 100;
+
+    // Combined score with weights
+    return moneyScore * securityScore * timeScore * chanceScore * growthScore;
 }
 
 /** Threads needed to weaken a server to its minimum security level. */

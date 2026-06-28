@@ -1,6 +1,7 @@
-import { NS, Server, Player } from '@ns';
-import { formatRam, formatMoney, formatPercent } from '../lib/format';
+import { NS, Server } from '@ns';
+import { formatMoney } from '../lib/format';
 import { findAllServers } from '../lib/network';
+import { calculateServerValue } from '../lib/server';
 
 /**
  * Format RAM to human-readable string
@@ -15,31 +16,6 @@ export function formatRamGb(ram: number): string {
     } else {
         return `${(ram / (1024 * 1024)).toFixed(2)}PB`;
     }
-}
-
-/**
- * Calculate the value of a server for targeting purposes
- * @param ns - The Netscript API
- * @param target - Target server
- * @returns Server value score
- */
-export function calculateServerValue(ns: NS, target: string): number {
-    const maxMoney = ns.getServerMaxMoney(target);
-    const minSecurity = ns.getServerMinSecurityLevel(target);
-    const hackChance = ns.hackAnalyzeChance(target);
-    const hackTime = ns.getHackTime(target);
-    const growthFactor = ns.getServerGrowth(target);
-
-    // Calculate a balanced score based on multiple factors
-    const moneyScore = maxMoney;
-    const securityScore = 1 / (minSecurity + 1); // Lower security is better
-    const timeScore = 1 / (hackTime / 1000 + 1); // Faster hack time is better
-    const chanceScore = hackChance;
-    const growthScore = growthFactor / 100;
-
-    // Combined score with weights
-    const score = moneyScore * securityScore * timeScore * chanceScore * growthScore;
-    return score;
 }
 
 /**

@@ -144,10 +144,17 @@ export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
     ns.enableLog('print');
 
+    // Parse CLI args for home RAM override
+    const args = ns.flags([['homeRam', 0]]);
+    const homeRamOverride = Number(args.homeRam);
+
     // Engine wiring
     const config = new HackingConfig(ns);
+    if (homeRamOverride > 0) {
+        config.setMinHomeReserve(homeRamOverride);
+    }
     const ramManager = new RamManager(ns, config);
-    const targetManager = new ServerTargetManager(ns);
+    const targetManager = new ServerTargetManager(ns, config);
     const formulas = new FormulaHelper(ns);
 
     const scripts = {

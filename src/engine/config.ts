@@ -109,6 +109,14 @@ export class HackingConfig {
     constructor(private ns: NS) { }
 
     /**
+     * Override the minimum home RAM reservation.
+     * Called at startup when --homeRam CLI flag is provided to batch_hack.ts.
+     */
+    setMinHomeReserve(gb: number): void {
+        (this.ramConfig as { minHomeReserve: number }).minHomeReserve = gb;
+    }
+
+    /**
      * Get script RAM usage
      */
     getScriptRam(script: string): number {

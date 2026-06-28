@@ -2,6 +2,7 @@ import { NS } from '@ns';
 import { findAllServers } from '../lib/network';
 import { calculateServerValue } from '../lib/server';
 import { FormulaHelper } from './formulas';
+import { HackingConfig } from './config';
 
 /**
  * Manages server targets for batch hacking
@@ -9,6 +10,7 @@ import { FormulaHelper } from './formulas';
 export class ServerTargetManager {
     private ns: NS;
     private formulas: FormulaHelper;
+    private config?: HackingConfig;
     private targetServers: string[] = [];
     private targetValues: Map<string, number> = new Map();
     private preparedServers: Set<string> = new Set();
@@ -16,10 +18,12 @@ export class ServerTargetManager {
     /**
      * Create a new server target manager
      * @param ns NetScript API
+     * @param config Optional HackingConfig for thresholds
      */
-    constructor(ns: NS) {
+    constructor(ns: NS, config?: HackingConfig) {
         this.ns = ns;
         this.formulas = new FormulaHelper(ns);
+        this.config = config;
         this.refreshTargets();
     }
 
@@ -81,8 +85,8 @@ export class ServerTargetManager {
      * @returns True if prepared
      */
     isServerPrepared(target: string): boolean {
-        const moneyThreshold = 0.9; // 90% of max money
-        const securityThreshold = 3; // Within 3 of min security
+        const moneyThreshold = this.config?.targetingConfig.moneyThreshold ?? 0.9;
+        const securityThreshold = this.config?.targetingConfig.securityThreshold ?? 3;
 
         const server = this.ns.getServer(target);
         const currentMoney = server.moneyAvailable || 0;
