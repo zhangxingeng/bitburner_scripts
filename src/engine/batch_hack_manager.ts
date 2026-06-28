@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { formatPercent, formatMoney } from '../lib/format';
+import { formatMoney, formatRam as fmtRam } from '../lib/format';
 import { RamManager } from './ram_manager';
 import { ServerTargetManager } from './server_manager';
 import { ThreadDistributionManager } from './thread_manager';
@@ -7,21 +7,6 @@ import { HackingConfig } from './config';
 import { FormulaHelper } from './formulas';
 import { Allocator } from './allocator';
 import { execMulti } from './exec_multi';
-
-/**
- * Format RAM to human-readable string
- * @param ram RAM in GB
- * @returns Formatted RAM string
- */
-function formatRam(ram: number): string {
-    if (ram < 1024) {
-        return `${ram.toFixed(2)}GB`;
-    } else if (ram < 1024 * 1024) {
-        return `${(ram / 1024).toFixed(2)}TB`;
-    } else {
-        return `${(ram / (1024 * 1024)).toFixed(2)}PB`;
-    }
-}
 
 /**
  * Represents batch calculation result
@@ -543,9 +528,9 @@ export class BatchHackManager {
             '┌─── BATCH HACK STATUS ───┐',
             `│ Total Batches: ${this.totalBatchesLaunched.toString().padEnd(8)} │`,
             `│ New Batches:   ${batchesLaunched.toString().padEnd(8)} │`,
-            `│ Free RAM:      ${formatRam(freeRam).padEnd(8)} │`,
-            `│ Reserved RAM:  ${formatRam(reservedHomeRam).padEnd(8)} │`,
-            `│ Utilization:   ${formatPercent(utilizationPercent).padEnd(8)} │`,
+            `│ Free RAM:      ${fmtRam(freeRam).padEnd(8)} │`,
+            `│ Reserved RAM:  ${fmtRam(reservedHomeRam).padEnd(8)} │`,
+            `│ Utilization:   ${utilizationPercent.toFixed(1).padStart(7)}% │`,
             '└───────────────────────┘'
         ].join('\n');
 
