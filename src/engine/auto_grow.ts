@@ -106,6 +106,7 @@ export class AutoGrowManager {
             let allPrepared = true;
             let preparing = 0;
 
+            const allProcesses = this.ns.ps();
             for (const target of targets) {
                 // Skip if already marked prepared
                 if (this.preparedServers.has(target)) continue;
@@ -118,7 +119,6 @@ export class AutoGrowManager {
                 }
 
                 // Check if any auto-grow scripts are still running
-                const allProcesses = this.ns.ps();
                 const targetProcesses = allProcesses.filter(process =>
                     process.filename === autoGrowScript &&
                     process.args.includes(target)

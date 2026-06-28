@@ -105,9 +105,9 @@ export class BatchHackManager {
         const serverOptimal = this.formulas.getOptimalServer(target);
         const player = this.ns.getPlayer();
 
-        // Calculate operation times
+        // Calculate operation times (weaken1 and weaken2 are the same duration)
         const weaken1Time = this.formulas.getWeakenTime(serverOptimal, player);
-        const weaken2Time = this.formulas.getWeakenTime(serverOptimal, player);
+        const weaken2Time = weaken1Time;
         const hackTime = this.formulas.getHackTime(serverOptimal, player);
         const growTime = this.formulas.getGrowTime(serverOptimal, player);
 
@@ -188,11 +188,6 @@ export class BatchHackManager {
             weaken2ServerAlloc.push(weaken2AllocRes.allocation);
 
             batchCount++;
-
-            // Small wait to prevent excessive CPU usage
-            if (batchCount % 5 === 0) {
-                await this.ns.sleep(1);
-            }
         }
 
         // If no batches could be allocated, return null
@@ -254,11 +249,6 @@ export class BatchHackManager {
                 bestDps = calc.dps;
                 bestHackThreads = hpb;
                 bestCalc = calc;
-            }
-
-            // Small wait to prevent excessive CPU usage
-            if (hpb % 5 === 0) {
-                await this.ns.sleep(1);
             }
         }
 

@@ -396,9 +396,10 @@ export class ThreadDistributionManager {
 
         // Check if we have enough RAM
         const totalRamNeeded = operation.threads * ramPerThread;
-        if (ramManager.getTotalFreeRam() < totalRamNeeded) {
+        const totalFreeRam = ramManager.getTotalFreeRam();
+        if (totalFreeRam < totalRamNeeded) {
             if (this.config.debug) {
-                this.ns.print(`Not enough RAM for operation ${operation.id}: ${operation.description} (needed ${totalRamNeeded}GB, available ${ramManager.getTotalFreeRam()}GB)`);
+                this.ns.print(`Not enough RAM for operation ${operation.id}: ${operation.description} (needed ${totalRamNeeded}GB, available ${totalFreeRam}GB)`);
             }
             return {
                 success: false,

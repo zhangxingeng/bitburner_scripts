@@ -221,12 +221,13 @@ export async function main(ns: NS): Promise<void> {
                 targetManager.refreshTargets();
 
                 const targets = getTargetServers(ns);
-                const prepared = targets.filter(t =>
-                    isServerPrepared(ns, t, config.targetingConfig.moneyThreshold, config.targetingConfig.securityThreshold),
-                );
-                const unprepared = targets.filter(t =>
-                    !isServerPrepared(ns, t, config.targetingConfig.moneyThreshold, config.targetingConfig.securityThreshold),
-                ).slice(0, config.targetingConfig.maxTargets);
+                const unpreparedAll: string[] = [];
+                for (const t of targets) {
+                    if (!isServerPrepared(ns, t, config.targetingConfig.moneyThreshold, config.targetingConfig.securityThreshold)) {
+                        unpreparedAll.push(t);
+                    }
+                }
+                const unprepared = unpreparedAll.slice(0, config.targetingConfig.maxTargets);
 
                 if (unprepared.length > 0) {
                     await prepareServers(ns, unprepared, availServers,

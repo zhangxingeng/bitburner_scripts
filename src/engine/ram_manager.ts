@@ -60,7 +60,9 @@ export class RamManager {
         this.ns.print(debugInfo);
 
         // Add purchased servers
-        for (const server of this.ns.getPurchasedServers()) {
+        const purchasedServers = this.ns.getPurchasedServers();
+        const purchasedSet = new Set(purchasedServers);
+        for (const server of purchasedServers) {
             const maxRam = this.ns.getServerMaxRam(server);
             const usedRam = this.ns.getServerUsedRam(server);
             const freeRam = maxRam - usedRam;
@@ -95,7 +97,7 @@ export class RamManager {
             if (server === 'home') continue;
 
             // Skip purchased servers, already handled
-            if (this.ns.getPurchasedServers().includes(server)) continue;
+            if (purchasedSet.has(server)) continue;
 
             // Only include rooted servers with enough RAM
             if (this.ns.hasRootAccess(server) &&

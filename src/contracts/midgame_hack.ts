@@ -223,6 +223,7 @@ async function updateServerInfo(ns: NS, formulas: FormulaHelper): Promise<Server
     const serverNames = findAllServers(ns);
     const player = ns.getPlayer();
 
+    const homeProcesses = ns.ps('home');
     for (const hostname of serverNames) {
         // Skip purchased servers with < 8GB RAM, they're not worth targeting
         if (hostname.startsWith('daemon') && ns.getServerMaxRam(hostname) < 8) continue;
@@ -239,7 +240,7 @@ async function updateServerInfo(ns: NS, formulas: FormulaHelper): Promise<Server
         const serverValue = calculateServerValue(maxMoney, minSecurity, server.requiredHackingSkill || 1, hackChance);
 
         // Check if server is currently being prepped or hacked
-        const processes = ns.ps('home').filter(p =>
+        const processes = homeProcesses.filter(p =>
             p.args.length > 0 && p.args[0] === hostname);
         const isPrepping = processes.some(p => p.filename.includes('/weaken.js') || p.filename.includes('/grow.js'));
         const isHacking = processes.some(p => p.filename.includes('/hack.js'));

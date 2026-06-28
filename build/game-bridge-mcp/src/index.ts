@@ -190,6 +190,8 @@ Returns the list of filenames on that server.`,
 const ReadFileSchema = z.object({
   filename: z.string().min(1).describe("Filename to read (e.g., 'engine/hack.js')"),
   server: z.string().default("home").describe("Server hostname (default: home)"),
+  offset: z.number().int().min(0).default(0).describe("Line number to start reading from (0-based, default: 0)"),
+  limit: z.number().int().min(1).default(100).describe("Maximum number of lines to return (default: 100)"),
 }).strict();
 
 server.registerTool(
@@ -201,8 +203,12 @@ server.registerTool(
 Args:
   - filename (string): The file to read, e.g. "engine/hack.js"
   - server (string): Server hostname. Default: "home"
+  - offset (number): Line to start reading from, 0-based. Default: 0
+  - limit (number): Max lines to return. Default: 100
 
-Returns the full file contents as a string.`,
+Returns lines with line numbers (format: "N\\t<content>").
+sourceMappingURL lines are stripped automatically.
+If the file is truncated, a trailing note shows total line count.`,
     inputSchema: ReadFileSchema,
     annotations: {
       readOnlyHint: true,
@@ -211,12 +217,28 @@ Returns the full file contents as a string.`,
       openWorldHint: true,
     },
   },
-  async ({ filename, server: host }) => {
+  async ({ filename, server: host, offset, limit }) => {
     await ensureConnected();
-    const content = (await rpc("getFile", { filename, server: host })) as string;
+    const raw = (await rpc("getFile", { filename, server: host })) as string;
+
+    const allLines = raw
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("//# sourceMappingURL="));
+
+    const totalLines = allLines.length;
+    const slice = allLines.slice(offset, offset + limit);
+    const numbered = slice
+      .map((l, i) => `${offset + i + 1}\t${l}`)
+      .join("\n");
+
+    const truncated = offset + limit < totalLines;
+    const text = truncated
+      ? `${numbered}\n[truncated — showing lines ${offset + 1}–${offset + slice.length} of ${totalLines}; use offset/limit to read more]`
+      : numbered;
+
     return {
-      content: [{ type: "text", text: content }],
-      structuredContent: { filename, server: host, content },
+      content: [{ type: "text", text }],
+      structuredContent: { filename, server: host, totalLines, offset, limit, truncated, text },
     };
   }
 );

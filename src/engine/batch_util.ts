@@ -142,9 +142,10 @@ export function getTargetServers(ns: NS): string[] {
     const hackLevel = ns.getHackingLevel();
 
     // Filter servers to those that can be hacked
+    const purchased = new Set(ns.getPurchasedServers());
     const targetServers = allServers.filter(server => {
         // Skip purchased servers and home
-        if (server === 'home' || ns.getPurchasedServers().includes(server)) {
+        if (server === 'home' || purchased.has(server)) {
             return false;
         }
 

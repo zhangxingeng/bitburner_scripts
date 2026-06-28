@@ -31,9 +31,10 @@ export class ServerTargetManager {
         const hackLevel = this.ns.getHackingLevel();
 
         // Filter servers to those that can be hacked
+        const purchased = new Set(this.ns.getPurchasedServers());
         this.targetServers = allServers.filter(server => {
             // Skip purchased servers and home
-            if (server === 'home' || this.ns.getPurchasedServers().includes(server)) {
+            if (server === 'home' || purchased.has(server)) {
                 return false;
             }
 

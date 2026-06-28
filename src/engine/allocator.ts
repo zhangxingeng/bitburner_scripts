@@ -7,6 +7,7 @@ export class Allocator {
     private availableAllocs: number[];
     private availableAscRank: number[];
     private serverUtilization: number[];  // Tracks utilization percentage of each server
+    private readonly totalCapacity: number[];  // Initial capacity per server (stable denominator)
 
     /**
      * Create a new thread allocator
@@ -14,6 +15,7 @@ export class Allocator {
      */
     constructor(availableAllocs: number[]) {
         this.availableAllocs = availableAllocs.slice();
+        this.totalCapacity = availableAllocs.slice();
         this.availableAscRank = availableAllocs.map((_, ind) => ind);
         this.serverUtilization = availableAllocs.map(() => 0);
         this._rerank();
@@ -130,12 +132,11 @@ export class Allocator {
         if (count === 0) {
             this.availableAllocs = availableAllocTmp;
 
-            // Update utilization metrics
+            // Update utilization metrics against stable initial capacity
             for (let i = 0; i < allocation.length; i++) {
                 if (allocation[i] > 0) {
-                    // Calculate new utilization as percentage of original capacity used
-                    const originalCapacity = this.availableAllocs[i] + allocation[i];
-                    this.serverUtilization[i] = 1 - (this.availableAllocs[i] / originalCapacity);
+                    const cap = this.totalCapacity[i];
+                    this.serverUtilization[i] = cap > 0 ? 1 - (this.availableAllocs[i] / cap) : 0;
                 }
             }
 
@@ -155,10 +156,9 @@ export class Allocator {
             if (allocation[i] > 0) {
                 this.availableAllocs[i] += allocation[i];
 
-                // Recalculate utilization after freeing
-                const totalCapacity = this.availableAllocs[i];
-                const used = totalCapacity - this.availableAllocs[i];
-                this.serverUtilization[i] = totalCapacity > 0 ? used / totalCapacity : 0;
+                // Recalculate utilization against stable initial capacity
+                const cap = this.totalCapacity[i];
+                this.serverUtilization[i] = cap > 0 ? 1 - (this.availableAllocs[i] / cap) : 0;
             }
         }
         this._rerank();
