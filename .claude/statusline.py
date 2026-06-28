@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.14"
-# dependencies = []
+# dependencies = ["tzdata"]
 # ///
 """Claude Code statusline — reads JSON from stdin, prints a multi-line ANSI status.
 
@@ -320,7 +320,7 @@ def fmt_k(n: int) -> str:
 
 def _git_cache_path(cwd: str) -> str:
     h = hashlib.md5(cwd.encode()).hexdigest()[:10]
-    return f"/tmp/claude-statusline-git-{h}.json"
+    return os.path.join(os.path.dirname(_DB_PATH), f"statusline-git-{h}.json")
 
 
 class GitInfo(TypedDict, total=False):
