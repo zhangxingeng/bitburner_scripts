@@ -1,0 +1,6 @@
+{
+  "bitburner": {
+    "command": "pnpm",
+    "args": ["exec", "tsx", "build/game-bridge-mcp/src/index.ts"]
+  }
+}

@@ -9,7 +9,7 @@
     },
     "statusLine": {
         "type": "command",
-        "command": "uv run --script \"$CLAUDE_PROJECT_DIR/.claude/statusline.py\""
+        "command": "uv run --script \"$CLAUDE_PROJECT_DIR\\.claude\\statusline.py\""
     },
     "attribution": {
         "commit": "",

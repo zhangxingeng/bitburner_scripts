@@ -19,6 +19,10 @@ const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Err
 let nextId = 1;
 const pendingSync = new Set<string>();
 
+// Admin state (port 12526)
+const adminSockets = new Set<WebSocket>();
+const adminPending = new Map<number, { adminSocket: WebSocket; adminId: number }>();
+
 // ── Helpers ──
 
 function log(tag: string, msg: string) {
@@ -95,7 +99,25 @@ function sleep(ms: number) {
 function handleGameMessage(raw: string) {
   try {
     const msg = JSON.parse(raw);
-    if (msg.id !== undefined && pending.has(msg.id)) {
+    if (msg.id === undefined) return;
+
+    // Route to admin client if this was proxied from one
+    if (adminPending.has(msg.id)) {
+      const { adminSocket, adminId } = adminPending.get(msg.id)!;
+      adminPending.delete(msg.id);
+      if (adminSocket.readyState === 1) {
+        adminSocket.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: adminId,
+          result: msg.result,
+          ...(msg.error ? { error: msg.error } : {}),
+        }));
+      }
+      return;
+    }
+
+    // Route to internal pending (bridge REPL / file sync)
+    if (pending.has(msg.id)) {
       const { resolve, reject, timer } = pending.get(msg.id)!;
       clearTimeout(timer);
       pending.delete(msg.id);
@@ -284,6 +306,61 @@ wss.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 startFileWatcher();
+
+// ── Admin WebSocket server (port 12526) ──
+// Accepts external tooling (MCP, scripts) and proxies JSON-RPC to the game.
+
+const adminWss = new WebSocketServer({ port: 12526 });
+
+adminWss.on("connection", (socket: WebSocket) => {
+  log("ADMIN", "Admin client connected");
+  adminSockets.add(socket);
+
+  socket.on("message", (data) => {
+    if (!gameSocket || gameSocket.readyState !== 1) {
+      socket.send(JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        error: "Game not connected",
+      }));
+      return;
+    }
+    try {
+      const req = JSON.parse(data.toString());
+      if (req.method === undefined) return;
+      const internalId = nextId++;
+      adminPending.set(internalId, { adminSocket: socket, adminId: req.id });
+      gameSocket.send(JSON.stringify({
+        jsonrpc: "2.0",
+        method: req.method,
+        params: req.params,
+        id: internalId,
+      }));
+    } catch { /* ignore malformed */ }
+  });
+
+  socket.on("close", () => {
+    log("ADMIN", "Admin client disconnected");
+    adminSockets.delete(socket);
+    // Clean up any pending requests from this socket
+    for (const [id, entry] of adminPending) {
+      if (entry.adminSocket === socket) adminPending.delete(id);
+    }
+  });
+
+  socket.on("error", (err) => {
+    log("ADMIN", `Error: ${err.message}`);
+  });
+});
+
+adminWss.on("error", (err: NodeJS.ErrnoException) => {
+  log("ERR", `Admin server error: ${err.message}`);
+  if (err.code === "EADDRINUSE") {
+    console.error("Admin port 12526 is already in use.");
+  }
+});
+
+log("ADMIN", "Admin server listening on port 12526");
 
 if (oneshot) {
   log("MODE", "One-shot — pushing all files then exiting");
