@@ -1,0 +1,344 @@
+---
+title: High-Quality Documentation Patterns
+description: "Read before writing any doc — canonical quality rules covering anti-patterns to cut, linking principles, scoping, and what makes docs lean and accurate"
+essential: true
+---
+
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import GithubLink from "@components/GithubLink.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="High-Quality Documentation Patterns"
+  purpose="Single canonical source for documentation quality rules — all other docs reference this instead of restating"
+  updateRules={[
+"Add patterns only when confirmed across multiple documents or repeated agent mistakes",
+"Every rule must be actionable — no aspirational platitudes",
+"If a rule applies to MDX formatting specifically, it belongs in mdx_doc_protocol.mdx instead"
+  ]}
+  agentGuidance={[
+"Read this before writing or updating any documentation",
+"These patterns apply to all doc types: protocols, proposals, references, agent docs, handoffs",
+"Violations of these patterns are the #1 cause of doc bloat and staleness"
+  ]}
+/>
+
+<DocumentScope
+  includes={[
+"Core quality patterns for lean, information-rich documentation",
+"Anti-patterns and what to cut",
+"Principles for linking, scoping, and structuring content"
+  ]}
+  excludes={[
+"MDX syntax and formatting (see mdx_doc_protocol.mdx)",
+"File organization and directory structure (see doc_taxonomy_protocol.mdx)",
+"Document categories and when to create them (see doc_taxonomy_protocol.mdx)"
+  ]}
+/>
+
+**Related:**
+
+* <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" />
+* <DocLink path="/generic_docs/craft/docs/mdx_doc_protocol">MDX Documentation Protocol</DocLink>
+
+These are the condensed rules for writing documentation that is maximally lean while staying information-rich. Every doc in this project should follow these patterns.
+
+---
+
+## Core Frame: Minimize Overhead
+
+Every pattern below is an application of one idea: **minimize overhead**. Overhead is anything that costs future readers time without giving them value they cannot get elsewhere. The numbered rules are specific applications; when they conflict or fall silent on a new situation, fall back to the frame.
+
+The test — apply to any doc, section, sentence, or cross-reference:
+
+> Would a future agent lose time *because* this exists, or *without* it existing?
+
+If "because," cut it. If "without," keep it. If neither answer is clearly true, default to **cut** — absence is free; presence must earn its space.
+
+### Minimum-form bias — the dominant tactic
+
+Reach for the shortest expression that carries the rule. Words before examples; one tight example before three; short prose before long. An example earns space only when prose can't carry the contrast. A second example earns space only when the first leaves a load-bearing case ambiguous. Verbose docs degrade every reader downstream — token cost compounds across every loaded doc, and prose padding pushes load-bearing content out of context windows.
+
+Self-test on every block you write: would the rule still land if I cut this sentence / row / code block? If yes, cut.
+
+### What counts as overhead
+
+|Category|Why it's overhead|
+|-|-|
+|**Duplicate content**|Two canonical sources diverge over time; readers don't know which is authoritative. (→ §1 Refer, Don't Repeat)|
+|**Common knowledge**|Competent agents already have it; writing it down adds noise and buries the non-obvious parts. Git basics, Python syntax, "name your variables well."|
+|**Premature indirection**|A pointer to a doc that does not yet have enough content to earn the click. One sentence inline beats one click away for one sentence.|
+|**Aspirational content**|Behavior described but not implemented. Readers try to use it and fail. If it's not in the code, it does not exist yet.|
+|**Volatile values**|Line numbers, test counts, dated assertions ("as of 2026-04-19"), commit hashes in prose. Stale within a session. (→ §11 No Volatile References)|
+|**Preambles and padding**|"It's worth noting that…", "In this section we will…", transition sentences that restate the heading. (→ §2 NYC Real Estate Mentality)|
+|**Historical context**|"We used to do X but now do Y." Only earns space if knowing the history prevents a *current* mistake — otherwise it's trivia.|
+
+The list is not exhaustive. The frame is: **overhead is any content that duplicates, ossifies, or misleads.** Derive new categories from that frame as you encounter them.
+
+### Indirection is the hardest call
+
+A pointer is overhead when the pointed-to doc duplicates the context the pointer already gives. The same pointer is *subtraction* of overhead when it consolidates content that would otherwise live in three places. The deciding question:
+
+> Does this pointer reduce total word count across the system, or just relocate it?
+
+If it relocates without reducing, you've added a hop without adding signal. Inline the content or delete it — don't create indirection for its own sake.
+
+---
+
+## Capture Wisdom, Not Just Rules
+
+Rules tell an agent *what to do* in situations the rule-writer anticipated. Wisdom tells an agent *why it works*, so they can make the right call in situations nobody anticipated. Rules are finite; the situations a future agent will face are not. Only wisdom bridges the gap.
+
+**What this means in practice:** When documenting a design decision, don't just state the rule ("the embedding model is pinned, not operator-configurable"). Capture the *generative principle* underneath it — the insight that would let someone who'd never seen the rule arrive at the same conclusion independently ("if changing a value silently breaks queries with no error and no migration path, it cannot be operator-configurable"). The rule handles the cases you foresaw. The principle handles everything else.
+
+A comprehensive ruleset covers 99% of situations. But like law, there are always edge cases the rules didn't anticipate. If the reader only has rules, they're stuck. If they have the wisdom that *generated* those rules, they can reason about the remaining 1% and stay aligned with the original intent.
+
+**The test:** After writing a rule or decision, ask: "If someone encountered a *new* situation not covered by this rule, would this doc give them enough understanding to make the right judgment call?" If not, the *why* is missing.
+
+|Write This (Wisdom)|Not Just This (Rule)|
+|-|-|
+|"If a library reads env vars at import time before your settings layer loads, those vars must exist in the `.env` file — setting them in Python is too late"|"Put `SOME_LIB_LOG_LEVEL` in the `.env` file"|
+|"Users want to click once and see the source — intermediate reasoning layers don't add confidence, so derived content must chain back to originals"|"Citations must point to original documents, not derived content"|
+|"Grouping config into Pydantic models reveals module boundaries — if a config class feels like a junk drawer, the code behind it is mixing concerns"|"Use separate Pydantic models for each config group"|
+
+When the doc you're writing tells another agent what to do — prompts, handoffs, principles — apply the carry-the-why stance (state the reason behind each rule rather than just the rule itself), which specializes this principle into the `must → because` test plus its middle-stance shapes, the decide-vs-ask rule, and pointer discipline.
+
+---
+
+## Treat Docs Like Code
+
+A doc is an engineering artifact, not prose that merely lives in a repo — so every discipline that keeps a *codebase* maintainable applies to the docs tree unchanged. The numbered rules below *are* those disciplines specialized to prose; naming the mapping is what lets you derive the rule a new case needs, instead of memorizing the list.
+
+|Code discipline|Its form in the docs tree|
+|-|-|
+|DRY — one source of truth, callers reference it|§1 Refer, Don't Repeat — one canonical doc per concept; everything else links|
+|Separation of concerns / single responsibility|§6 One Focus Per Document — one subject per doc; mixed concerns split into two|
+|Dead-code elimination|§8 Rewrite in Place — no `_old`/`_deprecated` parallel docs left to mislead|
+|Interfaces and naming|The frontmatter `description` is the doc's signature (§12); the path is its name (<DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" />)|
+|Cohesion — a module does one obvious thing|<DocLink path="/generic_docs/craft/code/coding_principles" />'s Obviousness principle, read on the doc as on a code file|
+|YAGNI / no premature abstraction|Minimize Overhead (above) — presence must earn its space; a premature pointer is a hop without signal|
+
+When the rules fall silent on a new case, ask the generative question: **what would good code do here?** Three near-identical sections are copy-paste duplication — extract the shared part and link. A description forced to enumerate two unrelated surfaces is a class with two responsibilities — split the doc. The discipline reaches past prose into the *retrieval* layer too: a router that copied each catalog `description` into its return would cache a second copy of a single source, so it returns stems and the caller dereferences on demand (<DocLink path="/generic_docs/craft/docs/docs_routing_protocol" section="tiering-and-return-format" />). Distinct from §4 *Code Is Truth* — that governs which surface wins when a doc and the code *disagree*; this governs writing the doc with the same engineering rigor in the first place.
+
+---
+
+## 1. Refer, Don't Repeat
+
+One canonical location per concept. Everything else links to it.
+
+* **Link to source files** instead of copying code — code changes, links stay relevant
+* **Don't re-explain the code in prose.** If a function's name and signature already carry the meaning, point at the file with a one-sentence intent statement. Paragraphs that narrate what the implementation does duplicate the code with a worse half-life — code carries *how*; the doc carries *why* (see §4 for the framing). The same principle cuts multi-line examples down to the shortest form that conveys the intent.
+* **Cross-reference other docs** instead of restating their content
+* **Link out for generic theory; keep stack-specific reasoning inline.** When a high-quality source already covers the theory well, link it instead of restating. Our doc carries what's specific to our stack and decisions; the source carries the textbook — a reader who needs the theory clicks through, a reader who already has it stays here. The link target is often **internal**: a leaf doc carries this project's wiring (real entities, real endpoints) and `<DocLink>`s the trunk `stack/<tech>` doc for the framework mechanics, the same way it would link an external reference. This is the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="split-and-link--one-subject-often-two-docs">split-and-link discipline</DocLink>: one subject often needs both a trunk doc (the portable doctrine) and a leaf doc (our wiring), each linked to the other. Worth linking only when the source has several insights; one-point sources go inline — and don't split off a trunk doc when its generic stratum is under ~2 paragraphs, where the cross-doc hop never pays for itself (the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="split-and-link--one-subject-often-two-docs">thin-split guardrail</DocLink>). Prefer stable reference material (framework docs, standards, our own trunk corpus) over blog posts that may disappear or silently change.
+* If you're explaining the same thing twice, extract to a shared doc and link
+* Short pseudocode (3-5 lines) showing a *pattern* is acceptable; real implementation code is not
+
+**Carve-out for prompt-template bodies.** A `*_template.mdx` doc has two layers — wrapper prose and a fenced prompt body that gets copy-pasted into a fresh top-level session (see <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="agent-definitions-vs-launch-brief-templates">Documentation Taxonomy — Agent Definitions vs Launch-Brief Templates</DocLink>). The wrapper still follows refer-don't-repeat. The body bends it: a freshly-pasted session loads the prompt *before* its first get-context call, so any rule that must shape its first move has to be inlined into the body itself. Inline what's load-bearing for action one; link for everything else. The body is an **artifact**, not prose — its job is to make a fresh session act correctly without prior context, and that occasionally costs duplication. Authors of these docs should still recognize duplication as a cost worth minimizing; it's just no longer a hard veto.
+
+## 2. NYC Real Estate Mentality
+
+Every word costs tokens. Every line must earn its space.
+
+**Why this sharpens in the AI era.** Docs aren't just disk; every doc-token loaded by a reading agent enters that agent's context window and competes with the code it's there to help. Intelligence is cheap now — one more LLM call costs cents. *Attention* is the bottleneck: a bloated doc doesn't just slow the current reader, it degrades every downstream decision by pushing load-bearing content out of the window. The test for every sentence, table row, code block, or pointer: "would an agent's next action change if this were missing?" If no, cut it.
+
+* Every paragraph answers: "What decision does this help someone make?"
+* If a sentence adds no value, delete it
+* One concept per paragraph, no padding
+* If a doc is getting long, consider whether it covers too much and should be split — but let the topic's complexity dictate the length, not an arbitrary cap
+
+|Keep|Cut|
+|-|-|
+|Non-obvious implications and gotchas|Obvious statements ("Svelte uses components")|
+|The "why" behind decisions|"It's important to note that..." preambles|
+|Gotchas that prevent mistakes|Historical context (unless it prevents mistakes)|
+|Actionable constraints|Aspirational features not yet implemented|
+
+## 3. Document the "Why" Inline
+
+Every design decision should include its reasoning *next to the decision*, not in a separate rationale section.
+
+* Why this approach was chosen, what was rejected, what assumptions make it correct
+* An agent who knows *why* can adapt when reality diverges from the plan
+* An agent who only knows *what* will break things the moment circumstances change
+
+## 4. Code Is Truth — With One Exception
+
+Docs and code are complementary surfaces, not redundant ones. The doc carries **intent** — why a system exists, what shape it takes, what constraints it must honor, what the reader should know before reading code. The code carries **implementation** — the mechanics, types, branches, edge cases. A reader new to the surface should learn intent from the doc, then read the code for the specifics. Overlap is the failure mode: when the two surfaces try to say the same thing, they diverge over time and the reader cannot tell which is authoritative.
+
+This is why **code is truth in conflicts** — code is the surface that *executes*; docs are the surface that *reasons*. When the two disagree about what exists, the executing surface wins.
+
+* Before documenting: locate source file → read the code → write description → add file reference
+* Never document features you can't find in source
+
+### When docs and code disagree
+
+A mismatch between a doc and the code has **two possible causes** — and the response is different for each:
+
+|Scenario|How to recognize|Action|
+|-|-|-|
+|**Doc is outdated, code is correct**|Doc references renamed files, removed features, old class names, stale paths. The code works and follows a coherent pattern.|**Update the doc** to match the code.|
+|**Doc describes the right protocol, code is wrong**|Doc describes a clean, generic, elegant pattern. Code violates it — but the violation looks like a bug, shortcut, or oversight, not a deliberate redesign.|**Do NOT update the doc or the code.** Report the discrepancy so a human can review it.|
+
+**How to tell the difference:** Good protocols are generic and elegant — they describe *why* a pattern exists, not just *what* to do. Bad code is recognizable: inconsistent naming, missing error handling, patterns that work by accident. If the doc reads like a well-reasoned design decision and the code looks like someone forgot to follow it, the code is the problem.
+
+**The key rule:** Doc auditors may freely update docs but must **never silently "fix" code to match docs**. Code changes require human review. When in doubt, report rather than update — a false positive (flagging correct code) wastes a minute of review; a false negative (silently making a doc match broken code) enshrines the bug.
+
+### Verifying an existing doc
+
+Auditing or maintaining a doc — whether sweeping the whole thing or updating a section against a known change — means tracing every factual claim back to its source rather than inferring from the prose. Each claim type has a check:
+
+|Claim type|What to verify|
+|-|-|
+|**File paths**|The path exists and points where the doc says|
+|**Code behavior**|Matches what the code actually does — read the source, don't infer from the doc's own description|
+|**API shapes, config keys, command examples**|Still current — names, signatures, and flags match the live definitions|
+|**Cross-references**|Linked docs exist and cover what's claimed — a `<DocLink>` validates at build time, but the *claim about what the target covers* still needs a human read|
+
+Classify each verified claim as **wrong** (doc says X, code says Y → fix the doc), **stale** (describes something gone → remove it), or **unverifiable** (can't find the source → flag it in the report, never invent). When a claim is wrong, the "When docs and code disagree" table above decides whether the doc or the code is the one in error before you touch anything.
+
+A full sweep verifies every claim from scratch and condenses every section; a targeted update verifies only what the known change touches and condenses opportunistically on the sections it edits. The split exists because verifying a whole doc cold is expensive — when the caller already knows what changed, spend the context on the change, not the re-trace.
+
+## 5. Tables Over Prose
+
+Tables are the densest format for structured information. Use them for:
+
+* File locations, API endpoints, status mappings
+* Decision matrices ("when to use X vs Y")
+* Quick-reference comparisons, state transitions
+
+## 6. One Focus Per Document
+
+If you're covering multiple unrelated topics, you're writing multiple documents.
+
+* Explicit scope boundaries (includes/excludes) prevent creep
+* Readers and agents should know immediately what belongs here vs. elsewhere
+
+## 7. Patterns Over Implementation
+
+Examples show concepts, not copy-pasteable code.
+
+* Use simplified, fictional names (`ExampleService`, `foo`)
+* Focus on the pattern/principle, not specific implementation details
+* Make it obvious the example demonstrates a concept
+
+**Mock names in rules, real names in references.** A rule that says "don't put `QDRANT__HOST` in constants" reads as advice about Qdrant. A rule that says "don't put `SVC__HOST` in constants" reads as advice about *any* service host. The first teaches one fact; the second teaches a transferable principle — future agents encountering a new service apply the generic version instinctively. The distinction: rules use mock names, references use real names. Pointing to actual code (`see llm_settings.py for the configuration`) is exactly when the real name belongs.
+
+**How strictly this binds forks on genericity.** Whether a rule's example *must* be mocked depends on which tree the doc lives in — the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="the-genericity-test">trunk-vs-leaf genericity test</DocLink> decides:
+
+* **Trunk docs (the generic corpus): BINDING.** A trunk doc ships to other companies on the same stack, so a real domain entity in a rule example doesn't transfer — the reader at the other company has no `Juror`, and the example reads as advice about a thing they don't have. A trunk rule example must use a mock entity (`Widget`, an invented two-field model — never a real domain object), or the doctrine doesn't survive the move. This is the same constraint the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="reference-direction--links-point-inward">reference-direction invariant</DocLink> enforces from the link side: a trunk doc reaching for a real project entity has one fix whether the entity shows up in an example or a link target — mock it, never reach into the leaf.
+* **Leaf docs (this project's tree): optional.** A leaf doc never leaves this project, so its rule examples may use this project's real entities — the transfer concern that makes mocking binding upstream simply doesn't apply. Mock if it reads cleaner; use the real name if it grounds the rule better.
+
+*§7 sharpened, not reversed — §7 was always about portability; the genericity axis just makes the reason explicit and the binding scope precise, and leaf real-names were already permitted by the "real names in references" half above.* (Named deviation per <DocLink path="/generic_docs/craft/docs/protocol_writing_protocol" section="adherence-and-deviation">protocol_writing's name-your-deviation rule</DocLink>, so a future auditor reads the conditional as intentional and doesn't re-flatten it to a flat universal.)
+
+```python
+# Rule example — fictional, clearly not real
+SVC__CONNECTION_TIMEOUT = 30
+
+# Rule example — real name, looks like advice about this specific thing
+QDRANT__GRPC_PORT = 6334
+
+# Pointer to real code — the real name carries the reference
+# See shared/vector_store/settings.py for the Qdrant configuration
+```
+
+**The same contamination scales from names to whole examples.** A real worked example drags in incidental domain detail — extra fields, a real bug's specifics, a familiar entity — that a reader can't separate from the load-bearing point, so they over-fit the concept to those specifics. A mock example (`Widget`, an invented two-field model) carries only the shape, so the concept transfers clean. Reach for a real reference to *point at code that exists*; reach for a mock whenever the example's job is to teach a pattern.
+
+**Infra identifiers leak like names do.** A container name (`app-backend-dev`), a compose service name, or a project-chosen runtime baked into a command isn't a domain *entity*, but a trunk doc that hardcodes one still reads as advice about this project's specific infrastructure — the next company runs different containers, maybe a different runtime. Mock the project-specific parts as you would an entity (a neutral `app-backend` placeholder, or "the app container"); and when the doctrine doesn't depend on the runtime, prefer the generic phrasing ("the container runtime") over the specific tool (`podman`), with an inline note that the reader substitutes their own. Generic industry tools that every project shares (`git`, `psql`) stay real — they read as references, not as this project's choices. The test is unchanged, just applied to the infra layer the entity examples don't reach: *would this survive verbatim at another company?*
+
+**The subject tool of a `stack/<tech>/` doc stays real.** The mocking above targets *other* infra identifiers that leak into a doc — container/compose/service names, the project's own tool choices — never the framework the neighborhood is *about*. A `stack/podman/` doc names Podman, `stack/vcr/` names vcrpy, `stack/stripe/` names Stripe, `stack/svelte/` names Svelte: the subject is the doc's reason to exist, and every project that pulls that doc runs that same tool, so it reads as a reference, not as this project's incidental choice (same spirit as "generic industry tools stay real," extended to the neighborhood's own subject). The leak the rule catches is the *neighboring* identifier — a `podman run` command in `stack/vcr/` that bakes in this project's container name, where the runtime is incidental to the vcrpy doctrine and the next reader substitutes their own.
+
+**Opinion leaks differently than names — and mocking can't fix it.** Every leak above is a *thing* the next company doesn't have, and the fix is a swap (`Juror`→`Widget`, `app-backend-dev`→"the app container"). A product *opinion* — "use plain language because our users are non-technical", an accessibility stance tuned to an anxious audience — leaks no name to swap; the leak is the *judgment itself*, true only for our kind of product. So its fix isn't a mock, it's a **relocation**: opinion-shaped content belongs in the leaf tree, not the corpus. When a doc resists mocking because there's no entity to replace, only a stance, that's the signal it failed the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="the-genericity-test">genericity test</DocLink> on the opinion axis and was never headed for the trunk.
+
+## 8. Rewrite in Place — Never Archive
+
+Stale docs are worse than no docs — they actively mislead. But "delete" is rarely the right move; **rewrite in place** is.
+
+* **Default: rewrite in place.** When the system a doc describes changes, override the doc's contents with the current reality. Name, path, and role in the docs tree stay stable; only the body refreshes. Other docs that link to it stay valid, and the catalog stays lean.
+* **Rare exception: delete.** Only when the new system has diverged so far that the old doc has ~0% salvageable value — nothing to rewrite from, no reader would benefit from the old framing. If you can salvage 20%, rewrite; delete is for near-zero cases.
+* **Never: archive.** No `_deprecated` or `_old` suffixes, no "last reviewed" dates, no version markers, no parallel-universe doc sitting next to its replacement. An archived-but-retained doc looks authoritative, isn't, and pollutes every catalog load and context window that touches it.
+* **Update promptly.** Drift cost grows superlinearly — a small refresh now beats a forensic rewrite later.
+
+### Updates Are Rewrites in Miniature
+
+The rule above governs whole-doc rewrites. The same discipline applies to every update — additions, corrections, expansions, drift fixes. When a doc gains new content, restructure the surrounding text so the addition flows with the rest; a fresh reader should not be able to detect the seam. Think at the intent level first: imagine what the ideal doc would look like if the new content had always been there, then reshape the existing doc into that form.
+
+Visible accretion — appended bullets that disrupt the doc's voice, parallel sections covering content that should have merged into an existing one, drive-by paragraphs that don't match the tone around them, sub-par sentences kept because they're technically correct — signals the editor optimized for diff size over reader experience. The cost is paid by every future reader, not the editor.
+
+This applies even when the edit was prompted by a narrow trigger (one drift fix, one new constraint). The trigger doesn't license a local patch; it licenses whatever surrounding rewrite makes the result coherent.
+
+## 9. Transmit the Idea, Not the Procedure
+
+A doc's reader is as capable as its author: give them the **idea** and the constraints, and they reconstruct the steps from that plus the codebase in front of them. A step-by-step recipe inverts this — it bets the author's environment still matches the reader's, so the moment a file moved or a step already ran, it *misleads* instead of guiding. The cost is sharper than verbosity: the fragile *means* ages against the durable *end*, so a stale recipe is worse than none.
+
+Default to intent — the problem, the solution's shape, the constraints each with its *why*, the dead ends already ruled out — then let the reader sequence. The tell that a doc skews too procedural: a reader who knew the goal could write the steps themselves, or they'd break if the code shifted by one commit.
+
+* **Mechanical work is the exception** — bulk renames, fill-this-template boilerplate, operations with no judgment calls. There the steps *are* the content; script them.
+* This is the doc-content face of **brief, don't script** (<DocLink path="/generic_docs/craft/team/agent_prompt_protocol" />); **§13** applies it to proposal docs and **Capture Wisdom** is its generative twin — carry the *why* so the reader handles what no rule anticipated.
+
+## 10. Metadata Must Earn Its Space
+
+If a doc uses `<DocMeta>` or `<DocumentScope>`, every item must be specific to *that* document.
+
+* Generic rules ("keep it concise", "follow conventions") belong here, not repeated in every file
+* Intentional deviations from conventions are high-value metadata — they prevent agents from "fixing" deliberate choices
+* If metadata would only contain generic items, omit the component entirely
+
+## 11. No Volatile References
+
+Never embed values that change every few commits — line numbers, test counts, file sizes, commit hashes, "last reviewed" dates. They go stale within a session and then actively mislead.
+
+* Cite files by path (`<GithubLink />`), not by line number
+* Refer to a specific function or variable by name, not by location
+* Describe a suite's shape ("the auth integration suite covers registration, refresh, and logout") rather than its count
+* If a number truly matters (a budget cap, a protocol version), link to the source file that defines it so the doc stays in sync automatically
+
+### Volatile structure, not just volatile values
+
+The rules above ban volatile *values*. The same rot hits volatile *structure* — references that break on reordering, not on value change. Inserting or removing one item shifts every position after it, so any pointer keyed to position cascades into a rewrite.
+
+* Avoid order-dependent pointers: numbered section anchors (`section="12-some-heading"`), "the third item above", positional list indices into another doc.
+* Prefer stable named anchors and section *titles* — they survive reordering because they key on identity, not position.
+
+**Carve-out — doc→doc vs. raw paths.** A `<DocLink>` between docs is fine: the build validates it, so a stale link fails loudly at build time instead of rotting silently. The rot lives on **non-doc surfaces** — code comments, env files, scripts — that carry raw `docs/…mdx` path strings with nothing to validate them. Those name the doc by topic in natural language instead.
+
+## 12. Writing Frontmatter Descriptions
+
+The frontmatter `description` is the only string an agent sees when deciding whether to read a doc — the ranking signal for the docs catalog and the per-entry blurb in the generated catalog (<GithubLink repo="ai-first-docs" path="craft/docs/generated_essential_docs.mdx" />). A description is a tiny pointer to its doc; the voice rules — `must → because`, brief-not-script, the failure mode that vague pointers get skipped — apply verbatim. This section covers the frontmatter-specific deltas.
+
+### Frontmatter-specific deltas
+
+1. **Be as concise as possible, no fluff.** A simple single-surface doc may fit in ~50 chars; a multi-surface protocol may legitimately need ~450. The catalog shows every essential doc, so verbose descriptions defeat its purpose, but artificial trimming that drops load-bearing nouns hurts more than the extra chars cost. Treat the description as a separation-of-concerns lens: if your description is climbing past **~500 chars**, that's a red flag the doc may be mixing concerns (`§6 One Focus Per Document`) — re-read with that lens before tightening prose. The verify command warns at 250 (soft, "tighten if possible") and errors at 500 (hard, mix-of-concerns).
+2. **No colons in YAML values** — they break parsers. Use em-dashes, or rephrase the trigger as a noun phrase.
+3. **Don't restate the title.** The catalog shows both. The description adds *new* triage signal — what *triggers* the read, not what the doc *is*.
+4. **Lead with "Read when…" / "Use when…".** Agents triage by matching their current task against this phrase, so make the relevance condition explicit.
+5. **Trunk descriptions stay business-neutral; leaf descriptions name the business surface.** A trunk doc's `description` is read by agents in *every* project that pulls the corpus, so a business noun in its trigger (`Read when modifying the juror billing flow…`) only matches one project and reads as noise in the rest — keep it neutral so the trigger matches across projects (`Read when wiring a Temporal workflow…`). A leaf doc's description does the opposite: it names the concrete business surface (`Read when changing the juror onboarding screen…`), because that noun is exactly the task-match signal its in-project reader triages on. Which side a doc sits on is the <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="the-genericity-test">genericity test</DocLink>.
+6. **Describe the document, not the system's live status.** The description is the doc's stable *identity* — what it covers and when to read it — never the current build state of the system it describes. A maturity claim in the description (`… core shipped; transformer deferred`) rots the instant the next slice lands, and worse: it caches into the docs catalog as a *verdict*, so an agent triaging the buildable frontier reads "shipped" and never opens the doc to find the unbuilt arc in its body. That exact failure under-plans rounds — the planner trusts the header and misses what the body still lists as remaining. Maturity/status is point-in-time; it belongs in the body (dated, or better, code-referenced as the source of truth), not in the one string that ranks and gates every read. **The same ban covers a status-summary header** (a top-of-doc "core shipped" Aside): a reader treats it as an equally conclusive verdict and stops before the body. State *what the system is for and how it's shaped* in the identity surfaces; keep *what's built vs. unbuilt* in the body where it reads as a point-in-time note, not a gate. (`§11` governs volatile *values*; this governs the *placement* of status claims — maturity belongs out of every surface read as the doc's identity.)
+
+### Self-test
+
+If an agent reads only this description while triaging their current task, would they know whether to click? If the trigger isn't explicit and the load-bearing nouns are missing, the description will get skipped — and the doc inside might as well not exist.
+
+|Good (LLM-actionable)|Bad (generic summary)|
+|-|-|
+|"Read when adding or modifying API endpoints — covers routing, DTOs, guards, error handling, response shape"|"Overview of the API architecture"|
+|"Read when writing backend tests — covers fixtures, factories, assertions, test isolation patterns"|"Coding conventions for writing backend tests"|
+|"Read when you hit Temporal workflow bugs — replay issues, determinism violations, common pitfalls"|"Frequent problems with Temporal workflows"|
+
+## 13. Proposal-Tree Docs — Problem + Direction, Not Recipes
+
+Docs under `proposals/` carry plans for work not yet executed. They get written by one agent, parked for days or weeks, then read by a different agent — often after the surrounding code has shifted. Every concrete reference (named function, file path, line number, API symbol) is a bet that the symbol still exists in the same shape when the plan gets picked up. The empirical failure mode: a parked plan referenced `workflowProgressStore.updateStatus` — an API that did not exist. Workflow status had moved into the query cache; the named store was eventually deleted entirely. The plan was *worse than no plan* because it confidently pointed in the wrong direction.
+
+**The rule:** proposal-tree docs carry **problem statement + proposed solution direction**, and stop short of naming exact functions, files, or APIs the plan's reader will have to re-verify on pickup. Concrete pointers belong in commit messages and PR descriptions — surfaces that age with the code, not against it.
+
+|Keep in proposal-tree docs|Push out of proposal-tree docs|
+|-|-|
+|What problem this solves — the gap, the trigger, the user-visible consequence|Exact files, functions, line numbers — they age against the plan|
+|Why this approach was chosen — rationale that survives architecture drift|Step-by-step execution recipe|
+|Constraints / non-negotiables — `must` paired with `because`|"Edit X.py to call Y, then add Z to W\.svelte"|
+|Acceptance signal — how we'll know it's done|Implementation pseudocode unless it's a 3-5 line *pattern*|
+|Pointers to existing protocols whose contracts the work must honor|Pre-decided sequencing for non-mechanical work|
+
+**Relationship to §4 and §11.** §4 polices the doc-vs-code direction (don't override code with stale doc claims); §11 polices specific volatile values (line numbers, counts, dates). This rule covers a broader failure mode the other two miss: even when individual claims are non-volatile and code-grounded *at write time*, exact-execution recipes accrete a coherent stale shape that's worse than the sum of its parts. A plan that names six functions in a specific call order ages worse than one that says "extend the SSE coordinator's failure-path coverage."
+
+**Where this rule does not apply.** Mechanical work (bulk renames, fill-this-template boilerplate) genuinely is step-shaped — script it. The test: would the reader need to make judgment calls to do it well? If yes, brief instead.

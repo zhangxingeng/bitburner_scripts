@@ -1,0 +1,128 @@
+---
+title: Actionable Plan Execution Template
+description: "Use when turning a folder of actionable plan files into shipped, audited, committed code — the downstream plan-execution loop covering the resolve-actionability gate, file-disjoint region scheduling, the read-before-edit rule, diff-then-audit verification, and per-slice commit with the tooling and global-stash gotchas"
+essential: false
+---
+
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="Actionable Plan Execution Template"
+  purpose="A paste-into-a-fresh-session prompt that runs the downstream half of a plan pipeline: actionable plan files become shipped, audited, committed code"
+  updateRules={[
+"The fenced body is a bootstrap — it carries the coordination shape and the where-to-look map; the execution mechanics live in the docs it links (worker usage principles, feature build principles, parallel manager)",
+"Update the commit gotchas section when project tooling changes — the pre-commit hook behavior and per-repo commit pattern are project-specific",
+"The commit-then-remove lifecycle for prompt/report artifacts is the load-bearing rule — enforce it in the body"
+]}
+  agentGuidance={[
+"Paste the fenced body into a fresh top-level session to run the plan-execution loop",
+"The loop needs a top-level session because it dispatches builder and auditor workers per slice",
+"Resolve every open decision before dispatching a builder — a structural call made silently at build time becomes rework at review time"
+]}
+/>
+
+<DocumentScope
+  includes={[
+"The plan-execution loop — resolve actionability, schedule by file-disjoint region, enforce read-before-edit, verify the diff, audit, commit per slice",
+"When to resolve decisions yourself vs escalate to the user",
+"The commit gotchas that bite when committing a subset of a dirty tree",
+"The status ledger rules — shipped-but-unverified code is pending_review, never done"
+]}
+  excludes={[
+"The upstream half of the pipeline — turning rough problems into plan files (see actionable_plan_build_template)",
+"The parallel-sweep mechanics this loop may use (see parallel_agent_manager_protocol)",
+"Build phases and verify gates (see the project's build principles)",
+"Worker usage, model choice, artifact discipline, audit gate, and trust-the-diff (see the project's worker usage principles)"
+]}
+/>
+
+**Related:**
+
+* <DocLink path="/generic_docs/orchestration/multi_agent_principles" /> — why the post-build auditor is cast cold and never forked: its value is the blind spots it does not share with the builder
+* <DocLink path="/generic_docs/orchestration/agent_coordination_protocol" /> — the casting tree, verify-then-report, and file-disjoint worktree/merge discipline this loop enacts
+* <DocLink path="/generic_docs/orchestration/actionable_plan_build_template" />
+* <DocLink path="/generic_docs/orchestration/parallel_agent_manager_protocol" />
+
+Paste the fenced body below into a **fresh** top-level session to run the downstream half of the plan pipeline: actionable plan files become shipped, audited, committed code. The upstream half — producing those plans from rough problems — is the <DocLink path="/generic_docs/orchestration/actionable_plan_build_template" />.
+
+This pipeline is the lightweight path for a **batch of discrete fixes**. For a cohesive, multi-phase **full-feature build** whose design evolves during implementation, use the heavier 5-doc system instead — <DocLink path="/generic_docs/orchestration/multiagent_planning_protocol" />.
+
+The loop needs a top-level session because it dispatches builder and auditor workers per slice. The load-bearing rule it enforces: **resolve every open decision before dispatching a builder** — a structural call made silently at build time becomes rework at review time. Schedule by file-disjoint region (not topic), verify the diff yourself before auditing, and commit one green slice at a time.
+
+```markdown
+# Plan-execution loop
+
+You're picking up a repeatable loop: turning a folder of actionable plans into shipped, audited, committed code. The sibling `orchestration/actionable_plan_build_template` owns the upstream half (rough problems → plan files); this file owns the downstream half (plan files → code). Your project's core orientation docs load automatically — don't re-read what they cover. You're a competent peer: this passes goals and the coordination shape, not scripts.
+
+## Input
+A folder of plan files, each shaped *Problem / Root cause (file:line) / Approach / Open decisions / Verify* with a `Status:` line. The shape and lifecycle are defined in the sibling planning doc — read it for what a plan is; this doc assumes the plans exist.
+
+## The loop (per build round)
+
+### 1. Resolve actionability before you dispatch anything
+A plan handed to an implementer must carry a *settled* spec — the implementer should never have to make a load-bearing design call. Per plan:
+
+- **Resolve every `Open decision`.** Decide on best practice — vendor docs, framework convention, project precedent — and dispatch `get-context` before assuming no answer exists (the project's standing rules: decide-don't-ask + default-assume-a-doc-exists). Escalate to the user **only** the forks no doc resolves — user-facing UX calls, the scope of a new slice. Write each resolution back into the plan so the implementer inherits the decision, not the question.
+- **A plan still mid-design** (no contract exists yet, the approach is a sketch) is **not** an implementer's job. Dispatch a read-only explore/design worker to turn it into the actionable shape first, *then* resolve its decisions. Handing a half-designed plan to a builder produces a monkey-patch, because the builder fills the gaps with its best guess.
+
+Why this gate: a structural call made silently at build time becomes rework at review time (project rules). Front-loading the decision is cheap; unwinding a wrong one across a context boundary is not.
+
+### 2. Schedule by code region, not by plan
+The parallelism boundary is **file-disjoint**, not topical independence. Map each plan's write-set, then:
+
+- **Parallel** only the slices whose write-sets don't intersect.
+- **Serialize** slices that write a shared hot file (a layout, a registry, a sidebar) *and* slices with a declared cross-plan dependency (plan B says "do A first") — dependency-first.
+
+See the project's worker usage principles for the full calculus (group distinct fixes by region, the global-stash race that makes committing one branch unsafe while another writes disjoint files). Don't over-split either: a task that fits one agent's budget stays one slice even if it touches many files.
+
+### 3. Per slice: run the work loop, and force big-picture-before-edit
+Run the work loop and the prompt/report artifact pattern — don't restate them here. The deltas this loop insists on:
+
+- **The builder orients itself** — its first move is get-context (or the docs MCP) against the slice it's been handed, the same work loop you run. Your job in the brief is the *task-specific* context the builder can't derive: the plan's approach, the decisions you've already settled, the file ownership, the done-criteria. Don't pre-pick the slice's protocol stems for it — that's the builder's own first step.
+- Write `.claude/work/prompt_report/[task]_prompt.md`; the dispatch message is just the path. Use the project's build provider by default (project model rules).
+- **The implementer reads the handed-off docs AND cold-reads the surface files AND restates its understanding of the whole picture before it edits one line.** Encode this as a forbidden move in the prompt: *do not edit until you have read the listed docs and the surface, and confirmed the plan's approach still holds against what you found.* This is the load-bearing rule — a builder that starts from the plan alone misses the adjacent constraints the plan's author compressed out, and ships a patch over them.
+- Give explicit done-conditions, hand the plan's `Verify` block as the acceptance signal, and cap the report.
+
+### 4. Verify the diff, then audit
+- **Read the load-bearing diff yourself** — the headline describes intent, the diff describes reality.
+- Run the plan's `Verify` block.
+- For any slice spanning >2 files or touching a registry / protocol / shared contract, dispatch **one independent auditor** as the post-build audit gate — cold read, no framing from you. Fix CRITICAL/HIGH/MEDIUM and any pre-existing bug it surfaces *in-pass*, then re-lint/re-test (Gate 3). The gates and their ordering live in the project's build principles — point, don't re-derive.
+
+### 5. Commit per shipped-and-audited slice
+One commit when a slice's gates are green — small, self-contained, reviewable. Commit frequently because it leaves an audit trail and makes recovery cheap: if one agent's slice breaks something, you roll back that commit without losing every other slice's work. Commit the slice's `_prompt.md`/`_report.md` (+ any `_audit.md`) pair into history, then `git rm` the artifacts once the slice has shipped and audited — the **commit-then-remove** lifecycle: history is the permanent record, and shipped artifacts left in `.claude/work/prompt_report/` accrete as stale scratch that misleads the next agent about what's still active. If the project has multiple independent repos, commit each separately. Don't push unless asked. Then update the plan's `Status:`.
+
+**Two commit gotchas that bite when committing a subset of a dirty tree** (observed repeatedly — parallel slices leave other slices' files dirty):
+
+- **Pre-commit formatting + global stash collide.** The hook stashes unstaged changes, runs formatters on the staged files, and if formatting changes them it rolls the whole thing back and aborts (the stash conflicts with the auto-fix). Fix: run the project's formatter on the slice's files *before* `git add` so the hook finds nothing to change. Don't fight the hook — pre-format.
+- **The hook stashes unstaged *tracked* files but not *untracked* ones**, so committing slice A while slice B is dirty can leave an inconsistent tree the full-project type-check sees (e.g. a new untracked test importing an export whose source got stashed → "no exported member"). The full failure mode and escape-hatch recipe live in the project's build principles (commit cohesive sets, not partials); the campaign delta is just that parallel slices make the trap *more likely*, not different in shape.
+
+**Stage each slice's files explicitly at commit time** (never `git add -A`), or a slice's commit sweeps in another slice's still-uncommitted edits (observed repeatedly). The file-disjoint boundary from §2 governs the commit gate too, not just fan-out. 
+
+## Decision authority — decide vs escalate
+| Decide yourself (don't ask) | Escalate to the user |
+|-|-|
+| Anything with a canonical answer — vendor docs, framework convention, RFC, project precedent | User-facing UX/product calls no doc resolves |
+| Design/tradeoff forks where a project doc exists (default-assume one does; `get-context` first) | The scope of a new slice, or which of two equally-doc'd paths to take |
+| Naming, file placement, which existing primitive to reuse | A fork the plan's author explicitly flagged for the user |
+
+Record every self-made resolution in the plan; the next reader needs the *why*, not just the pick.
+
+## Status ledger — don't redo
+Plan `Status:` flows `needs design` → `ready to build` → `shipped, pending_review` → done. Shipped-but-unverified code is `pending_review`, never "done" — the user owns sign-off. Don't rebuild anything marked shipped/pending_review; a plan whose code shipped but whose doc or follow-up remains stays open with the remaining step named. Truth lives in each plan's `Status:` line and any misc file, not in any snapshot here.
+
+## Where to look
+- Dispatch, model choice, artifact pattern, audit gate, trust-the-diff: the project's worker usage principles.
+- Build phases and verify gates: the project's build principles.
+- Fan-out mechanics when a single audit/sweep spans many files: `orchestration/parallel_agent_manager_protocol`.
+- Per-slice protocols: let `get-context` pick per slice — don't guess stems.
+- What a plan is, and the upstream problems → plans loop: sibling `orchestration/actionable_plan_build_template`.
+```
+
+---
+
+## Related Documentation
+
+* <DocLink path="/generic_docs/orchestration/actionable_plan_build_template" /> — the upstream half of this pipeline
+* <DocLink path="/generic_docs/orchestration/parallel_agent_manager_protocol" /> — fan-out mechanics for sweep work

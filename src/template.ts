@@ -1,6 +1,6 @@
 import { NS } from '@ns';
-import { executeCommand } from './basic/simple_through_file';
-import { CrimeType, CrimeStats } from './lib/ns_types';
+import { executeCommand } from './tools/simple_through_file';
+import { CrimeType, CrimeStats } from './lib/types';
 
 export async function main(ns: NS): Promise<void> {
     const properCommandString = `ns.singularity.getCrimeStats("${CrimeType.shoplift}")`;

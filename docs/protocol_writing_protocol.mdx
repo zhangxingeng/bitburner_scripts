@@ -1,0 +1,325 @@
+---
+title: Protocol Writing Protocol
+description: "Read before writing or revising a `_protocol` doc — covers boundary tests vs overview/insight/procedure, required spine and conditional sections, terminology and cross-doc-reference discipline, voice stance, the enforcement-surface test for exception-free contracts, and the post-write audit handoff."
+essential: true
+---
+
+import GithubLink from "@components/GithubLink.astro";
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="Protocol Writing Protocol"
+  purpose="Codify the shape of a `_protocol` doc — required spine, conditional sections, terminology discipline, voice deltas, and the post-write audit handoff"
+  updateRules={[
+"Update when three or more protocols converge on a new section pattern worth lifting into the spine (rule of three)",
+"Generic doc quality stays in high_quality_docs_protocol; routing stays in doc_taxonomy_protocol — link out, don't restate",
+"Loosen a rule before tightening one — over-rigid protocol shape pushes authors toward `_misc` or unlabeled drift"
+  ]}
+  agentGuidance={[
+"Read before authoring a new `_protocol` file or substantially revising one — drift catches earlier here than in review",
+"This doc governs `_protocol` only. Overview, insight, procedure, and other types follow their own conventions (doc_taxonomy_protocol)",
+"Adhere to the spine by default; deviate cautiously when a surface genuinely fits a different shape, and name the deviation so the next reader doesn't paper-cut it back to uniformity",
+"Reserve an Enforcement section for contracts that are both re-implemented at many callsites and exception-free; default to reasoned prose that carries the why and respects agent judgment",
+"All doc-to-doc references go through `<DocLink>`; all source-code references go through `<GithubLink>`. Raw markdown links to `.mdx` files and bullet/table reference inventories are forbidden in new content"
+  ]}
+/>
+
+<DocumentScope
+  includes={[
+"What a `_protocol` doc is, and the drift symptoms that signal it's becoming something else",
+"The required-spine and the conditional sections — what each carries and when it earns its space",
+"Frontmatter description rules specific to protocols (the conceptual-lede beef on top of the generic rule)",
+"Inline terminology discipline that replaces a dedicated glossary",
+"Cross-doc reference discipline — `<DocLink>` for doc-to-doc references, `<GithubLink>` for source code, raw markdown forbidden",
+"The voice stance protocol authors inherit and the protocol-specific middle ground (carry the why when one exists; don't fabricate)",
+"The enforcement-surface test — when an exception-free, many-callsite contract earns a primitive + mechanical check, and why most rules stay reasoned prose",
+"The post-write independent-audit handoff"
+  ]}
+  excludes={[
+"Generic doc-quality patterns (see high_quality_docs_protocol)",
+"MDX syntax, components, frontmatter schema (see mdx_doc_protocol)",
+"Folder routing, type vocabulary, plan-folder conventions (see doc_taxonomy_protocol)",
+"Voice rulebook for any agent-directed text"
+  ]}
+/>
+
+This is the rulebook for authoring `_protocol` docs — the operational-contract type in the project's doc vocabulary. It sharpens the boundary tests in <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" /> for `_protocol` specifically, names the required spine and conditional sections, and codifies the protocol-specific voice deltas on top of the generic carry-the-why stance. Generic doc quality lives in <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" />; MDX syntax in <DocLink path="/generic_docs/craft/docs/mdx_doc_protocol" /> — link out, don't restate.
+
+---
+
+## What a `_protocol` Is — and Isn't
+
+A `_protocol` answers one reader question: **"what must I do, and what must hold?"** for callers of a system. Anything that drifts toward "how is this shaped today?" is `_overview` territory. Anything that drifts toward "here's what surprised me" is `_insight` territory. Anything that drifts toward "what do I run, in order?" is `_procedure` territory.
+
+The taxonomy-level type comparisons live in <DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="type-vocabulary">Documentation Taxonomy Protocol → Type Vocabulary</DocLink>; this section adds the drift symptoms that flag a protocol *already mid-drift* — the ones easy to miss in self-review because each individual line looks reasonable.
+
+**A `_protocol` can be trunk or leaf — genericity is independent of type.** The suffix names the *shape* of the doc, not which repo it lives in: a generic framework contract is a trunk protocol in the corpus, while a protocol describing this project's own endpoints is a leaf protocol in the project tree (<DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="genericity-is-orthogonal-to-type">Genericity is orthogonal to Type</DocLink>). Settle that axis first, because it decides one rule below: a **trunk** protocol inherits the *binding* mock-name rule — its examples must use mock entities (`Widget`, never a real domain object) or the contract doesn't transfer to the projects that pull the corpus, while a leaf protocol may use real entities (<DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="7-patterns-over-implementation">High-Quality Docs §7</DocLink>).
+
+|Drift symptom|What you're actually writing|Fix|
+|-|-|-|
+|Lines describing past changes ("we used to do X, now we do Y")|Changelog — belongs in the commit message or PR description|Strip the historical framing; document the current rule|
+|Numbered step-by-step recipes for non-mechanical work|`_procedure` — promote to a separate procedure doc|State the invariant and the trigger; let the reader sequence|
+|Debug-journey narrative ("we found that…", "after hours of…")|`_insight` — write the insight doc and link to it|Extract the journey; keep only the rule it generated|
+|Closing "Summary" section restating the body|Padding — the agent has already paid the context cost once|Delete it; the body said it|
+|Hardcoded line numbers, dated assertions, file sizes|Volatile values — stale within a release|Cite by path or symbol name, not by location (<DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="11-no-volatile-references">High-Quality Docs §11</DocLink>)|
+
+A protocol can carry a thin slice of insight when the insight is load-bearing for a rule the reader is about to follow — a library's v2 auth-flow quirk lives directly in `auth_integration_protocol` because callers of that protocol need to know it on first contact. The boundary: if the insight motivates a *specific rule on this page*, inline a sentence or two. If it has its own life as a debug story, write a sibling `_insight` doc and link from the protocol to it.
+
+### Adherence and deviation
+
+The shape rules below are tried-and-true patterns extracted from existing protocols across the codebase. Adhere to them by default — they remove the cognitive cost of picking shape for each new protocol, and they give cross-protocol consistency that compounds for readers who flip between them.
+
+When a surface genuinely fits a different shape and deviation conveys the contract better, deviate cautiously and name the deviation inline (a one-liner explaining why this protocol diverges from the spine). Silent deviation trains the next author to copy it; named deviation stays an exception.
+
+---
+
+## The Section Inventory
+
+### Required spine
+
+|Section|What it carries|Why|
+|-|-|-|
+|Frontmatter|`title`, `description` (see §3), `essential: true`|`essential: true` is the default for protocols because routine work in the area needs the doc unprompted (<DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="the-essential-frontmatter-field">doc\_taxonomy\_protocol § essential field</DocLink>)|
+|`<DocMeta>`|`document`, `purpose`, `updateRules`, `agentGuidance` — each field doc-specific|Per <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="10-metadata-must-earn-its-space">High-Quality Docs §10</DocLink>: generic fillers fail the earn-its-space test|
+|Lead paragraph (1–3 sentences)|What the system does + what this doc covers + pointer to a sibling `_insight` if one exists|A reader landing in §1 cold spends 2–3 sentences orienting; the lead does that work once for the whole doc|
+|Surface coverage (the body)|One section per surface, with tables for structured contracts (endpoint dispatch, event families, schemas, field meanings)|This is where the contract actually lives|
+|Scope fence — one of `<DocumentScope>` (top) OR Cross-Boundary References table (end of body)|Boundary of the protocol + pointers to adjacent owners|Without an explicit fence, adjacent concerns leak in indefinitely and the protocol grows into a kitchen sink. Pick by doc shape: `<DocumentScope>` works for small/focused protocols; Cross-Boundary table works better when there are many adjacent owners to enumerate; large protocols can use both|
+
+### Conditional sections
+
+Each conditional section earns its space only when the named condition holds. The default is to omit — absence is free, presence has to justify itself.
+
+|Section|Include when|Skip when|
+|-|-|-|
+|Mental model / core principles (**strongly recommended** — near-universal in multi-surface protocols)|The system has a load-bearing model worth naming up front (e.g. a "single-surface" framing, a "two-mode" framing) that makes every later section easier to read|Single-surface protocols simple enough that the body alone communicates the shape|
+|Invariants block|Invariants are scattered across the body and benefit from being lifted into one table for quick reference|1–2 invariants fit cleanly inside their owning section|
+|Gotchas / pitfalls|Shipped wisdom has accrued — agents have lost time to specific surprises that the body alone wouldn't warn against|The surface is straightforward; no recurring traps|
+|Configuration|Settings, env vars, or constants are part of the contract callers must respect|All knobs are internal implementation detail|
+|File organization|Multi-file system where the home of a new file is non-obvious|Single file; the source link in the lead covers it|
+|Anti-patterns / "Don't Do This"|Failure modes are easy to fall into *and* the fix is non-obvious from the spine alone|The spine rules already make the trap obvious|
+|**Enforcement** (contract-bearing primitive + mechanical check)|The contract is re-implemented at many callsites *and* is exception-free — no legitimate deviation a thinking agent would make (native `confirm()` for feedback; a missing keyboard handler on a double-click edit)|The contract admits a legitimate exception — reasoned prose is itself the enforcement and a check would punish judgment — or it's a one-time architectural decision with no repeated callsite|
+
+---
+
+## Enforcement — For Exception-Free Contracts Only
+
+Most protocol rules are reasoned prose by design: they carry a `because` and trust the reader — an intelligent agent — to apply judgment at the edge case the author couldn't foresee. That trust *is* the enforcement, and it is the right tool for any rule that admits a legitimate exception (the stance is that rationale outranks instruction — carry the why, respect the reader's judgment). Reaching for a harder mechanism by default would strip the judgment the prose exists to enable.
+
+A small minority of contracts are different: they admit **no** legitimate exception — the wrong form is *always* wrong — *and* they are re-implemented at many callsites, so the prose is retransmitted from memory each time and drifts. For those, and only those, name an enforcement surface so the contract holds by construction instead of by recall.
+
+**The discriminator is one question:** *does this contract admit a legitimate exception where a thinking agent might rightly deviate?*
+
+* **Yes → leave it as reasoned prose.** A mechanical check would fire on correct judgment. The prose with its why is the enforcement; this is the default, and it is deliberate — not an unfinished state.
+* **No → an Enforcement section is warranted.** Two shapes that pass cleanly: native `confirm()` / `alert()` for in-app feedback (never the right tool), or a double-click editor with no Enter/Space handler (an accessibility absolute). Because the wrong form is never right, catching it mechanically costs the agent no autonomy — there was no judgment to exercise.
+
+When the section is warranted, it names three things:
+
+* **The contract-bearing primitive** — the wrapper, component, or helper that makes the correct shape the path of least resistance, so callers satisfy the contract by construction. Cite it with `<GithubLink>` if it exists; if none does yet, say so plainly — "no primitive yet; callers hand-roll" is an honest gap to build, not a blank to paper over.
+* **The mechanical check** — the lint / Semgrep / type guard that fails CI on the hand-rolled shape, keyed on the canonical greppable form. The home for these is the project's quality toolchain.
+* **The why, carried on the check itself** — the lint or Semgrep message states the failure mode it prevents, never a bare "don't." A check without its reason is a `must` without a `because`: it trains the next author to copy ceremony, and it denies the agent who trips it the context to tell a true positive from a false one. Enforcement gets no exemption from carrying its vision — it carries it in the rule's message.
+
+Enforcement **complements, never replaces** the reasoned prose above it. The prose teaches the why and governs every case the check cannot see; the check catches only the one shape that is always wrong. A protocol that mechanizes a judgment-bearing rule has misread this section — re-apply the discriminator.
+
+---
+
+## Description and Inline Terminology
+
+### Beef the description
+
+The frontmatter `description` rule for `_protocol` docs extends the generic <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="12-writing-frontmatter-descriptions">High-Quality Docs §12</DocLink> rule by carrying the **conceptual lede** on top of the trigger phrase. A reader who only sees the description in a catalog listing should understand both *when to read* this doc and *what shape of contract* this protocol defines.
+
+Length: protocols tend to land longer than single-surface docs because multi-surface contracts carry more triage signal — canonical single-purpose protocols cluster around 200–280 chars, multi-surface protocols often land 300–450. The thresholds from `§12` still apply (soft warning at 250, mix-of-concerns red flag at 500); the protocol-specific note is only that landing above the soft cap is normal and doesn't require a rewrite when every clause names a real surface.
+
+The frontmatter-specific deltas from <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="frontmatter-specific-deltas">High-Quality Docs §12</DocLink> still apply — no colons (YAML hostility), no restating the title, lead with the trigger phrase.
+
+Self-test for a protocol description: *holding only the description in mind, can a reader tell whether their current task is governed by this protocol AND what shape of rules they'd find inside?* Both signals — task-match and contract-shape — earn the extra characters.
+
+### Inline term discipline (replaces a dedicated glossary)
+
+Terms get defined where first used, not in a separate glossary at top or bottom. The discipline: state **what the term IS, not what it does**, in one sentence. If an alias for the term exists in our codebase (older PR language, deprecated naming, a sibling concept that gets confused with it), note `_Avoid: <alias>_` at the definition site. **Skip the alias line entirely when no codebase alias exists** — empty noise costs context budget for no signal.
+
+When a protocol introduces 3+ entities with non-obvious cardinality, lift a small relationships table:
+
+|Entity|Relates to|Cardinality|
+|-|-|-|
+|`FoobarSession`|`AppUser`|N:1|
+|`FoobarSession`|`FoobarItem`|1:N|
+|`FoobarItem`|`Vendor`|N:1|
+
+This is opt-in. One or two entities, or obvious cardinality (e.g. "one session per user"), doesn't need lifting — the body's first mention is enough.
+
+Flagged ambiguities (a term that previously got confused with another, since resolved): inline a one-liner at the definition site, no standing "ambiguities" section. The line earns its space because it prevents the resolved confusion from re-surfacing; an empty placeholder would just be visual debt.
+
+---
+
+## Cross-Doc References — Components, Not Raw Markdown
+
+All references from one doc to another go through a component. Raw markdown links to `.mdx` files (`[text](/path)`) and raw file-path strings in prose render flat — inconsistent visual hook, no build-time validation that the target resolves, no single render path for future styling changes. A component renders a styled, validated link; broken paths fail the build rather than ship as silent dead anchors.
+
+|Reference type|Component|
+|-|-|
+|Doc → source code (Python, TypeScript, config, fixtures)|`<GithubLink>`|
+|Doc → another doc (inline mention OR block see-also list)|`<DocLink>`|
+|Doc's own in-scope / out-of-scope boundary|`<DocumentScope>` (`includes` / `excludes` props)|
+
+`<DocLink>` is canonical for doc-to-doc references. Same shape as `<GithubLink>` — works inline in prose, or as the body of a list item for block see-also style. By default it renders the target's frontmatter `title` as the link text; `children` overrides that, and a `section` prop appends an anchor.
+
+```mdx
+{/* Inline — auto-renders target doc's frontmatter title */}
+The voice rulebook lives in <DocLink path="/generic_docs/craft/team/agent_prompt_protocol" />.
+
+{/* Inline — custom link text */}
+See <DocLink path="/generic_docs/craft/team/agent_prompt_protocol">the must→because rule</DocLink>.
+
+{/* Inline — with section anchor */}
+<DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="capture-wisdom" />
+
+{/* Block see-also — a list of DocLinks */}
+* <DocLink path="/generic_docs/craft/team/agent_prompt_protocol" />
+* <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" />
+```
+
+What this forbids in protocol bodies:
+
+* **Raw markdown links to `.md` / `.mdx` files** — `[text](/path)`, `[text](./relative.mdx)`, raw GitHub URLs into the docs repo. Use `<DocLink>`.
+* **Markdown bullet lists or tables used as doc-reference inventories** ("Related Documentation", "Cross-Boundary References" tables, "See also" lists). The component is the only home for those, because a flat bullet loses the visual signal that distinguishes a doc reference from regular prose.
+* **Inline file-path strings as "see X" pointers** — wrap in `<DocLink>` if the target is a doc, `<GithubLink>` if it's source code.
+
+---
+
+## Voice — Carry the Why When One Exists
+
+`_protocol` docs inherit the carry-the-why stance — the receiving reader is an agent acting on the contract, so the discipline of stating reasons alongside rules applies. The protocol-specific delta is the middle stance below.
+
+The spirit, applied to protocol prose: **carry the why whenever one exists**. When a rule prevents a real failure mode, encodes a known constraint, or has a downstream consequence the author knows, state it — in any of the shapes below. When a rule is pure convention without deeper rationale, state the rule cleanly. *Don't fabricate a `because` clause just to satisfy form* — invented reasons read as ceremony and train future authors to copy the padding instead of honest signal.
+
+Shapes a real reason can take:
+
+* A `because` clause in the same sentence (the strongest form)
+* A follow-up sentence elaborating the constraint
+* A surrounding paragraph that makes the *why* obvious without explicit linkage
+* A link to the source file whose behavior makes the rule self-evident
+* An example in a table row demonstrating what breaks when the rule is violated
+
+The two failure modes this stance targets are symmetric: a rule with a real reason but no recoverable trail (agent hits an edge case and has no fallback), *and* a rule padded with a fabricated reason where none exists (prose drifts toward ceremonial form). The form is flexible; the discipline is honest signal — reason when one exists, clean rule when it doesn't.
+
+```text
+Acceptable — inline `because` (real reason)
+"Mode 1 streams need a polling backstop because the contract tolerates lost events."
+
+Acceptable — implicit through surrounding context
+"Anonymous visitors never reach this path: their `account_id IS NULL`
+means the billing system never fires `plan.changed`."
+
+Acceptable — reason carried by an adjacent example
+"Never set `record_mode` in the config dict — it silently wins over the `--record-mode` flag
+and breaks the integration test runner's record-override flag."
+
+Acceptable — convention stated cleanly (no fabricated reason)
+"Use `##` for major sections; Starlight reserves H1 for the frontmatter title."
+
+Unacceptable — rule asserted without reason when one exists
+"Never set `record_mode` in the config dict."
+(The real reason — silent precedence over the CLI flag — must be named.)
+
+Unacceptable — fabricated reason padding a pure convention
+"Use `##` for major sections because hierarchical structure aids reader comprehension."
+(The real constraint is "Starlight reserves H1." "Aids comprehension" is ceremonial filler.)
+```
+
+The rigid `must → because` test is the strongest form when a real reason exists. The looser shapes above are acceptable when surrounding prose carries the *why* implicitly. When no real reason exists, state the rule cleanly — honest signal beats ceremonial completeness.
+
+---
+
+## Audit After Writing
+
+After writing or substantially revising a protocol, dispatch a highly capable independent agent to audit the protocol against the code it claims to govern. The auditor's job: confirm the contract matches shipped behavior, surface invariants the doc claims that the code doesn't actually enforce, and flag drift symptoms (recipe creep, scope leak, missing cross-boundary references) the author may have missed in self-review.
+
+Keep the brief short — something like *"audit this protocol against its code; flag where the doc and code disagree, where invariants are claimed but not enforced, and where the shape deviates from the protocol-writing-protocol spine."* The auditor reads this document plus the protocol-under-audit plus the relevant source.
+
+This authoring audit is a **one-time** check at write time, distinct from the **standing** mechanical check an Enforcement section may introduce. The two are complementary and non-substitutable: the audit catches doc-vs-code drift the moment the doc is written; the standing check catches the day-to-day callsite drift the audit cannot be present for. A protocol can warrant both, one, or neither.
+
+**If you are the agent reading this section because you've been dispatched as the auditor:** do the audit. By role convention the audit recursion stops with you — an auditor *can* dispatch its own subagents (any agent with the `Agent` tool nests natively), but the audit role reads and reports rather than fanning out, so the dispatcher stays the single point that acts on fixes across the whole diff. Report findings back to the dispatcher; let them act on the fixes.
+
+---
+
+## Annotated Mini-Example
+
+The example below is **deliberately fictional** — a made-up `Widget Service` with mock entities, modeled as a **trunk** protocol living in the corpus under `stack/<tech>/`. Read it for shape and discipline, not for content; do not import names, paths, or semantics from it. Two things it demonstrates on purpose:
+
+* **Mock entities, because it's trunk.** A trunk protocol ships to every project, so its examples must use mock entities (`Widget`, never a real domain object) — the *binding* mock-name rule for trunk docs (<DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="7-patterns-over-implementation">High-Quality Docs §7</DocLink>). A real protocol pasted here would smuggle in domain detail that biases the reader toward its specifics instead of the shape it teaches.
+* **Cross-boundary links point at sibling trunk docs, not a leaf tree.** Its `<DocLink>` paths resolve *inward* to other docs in the same `stack/` neighborhood — never down to a project (`/billing/...`, `/surfaces/...`) path. A trunk doc that linked a leaf would dangle the moment another project pulled the corpus (<DocLink path="/generic_docs/craft/docs/doc_taxonomy_protocol" section="reference-direction--links-point-inward">reference direction — links point inward</DocLink>).
+
+```mdx
+---
+title: Widget Service Protocol
+description: "Read before registering a new widget type or modifying the widget lifecycle — the shipped contract covering registration, the widget.* event family, the per-widget dispatcher invariants, and the session-teardown ordering rule."
+essential: true
+---
+
+import GithubLink from "@components/GithubLink.astro";
+import DocMeta from "@components/DocMeta.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="Widget Service Protocol"
+  purpose="Operational contract for callers of the widget surface — registration, dispatch, cleanup invariants"
+  updateRules={[
+    "Match reality — if the code changes, this doc changes in the same PR",
+    "Narrow widget-debug stories live in the sibling insight.mdx, not here"
+  ]}
+  agentGuidance={[
+    "Read before registering a new widget type, adding a widget.* event, or touching the cleanup race"
+  ]}
+/>
+
+The Widget Service registers widget types at process start, dispatches inbound
+widget events to per-type handlers, and tears widgets down on session end.
+This doc is the shipped contract; debug history lives in a sibling
+`insight.mdx` in the same `stack/widget/` neighborhood (one subject =
+one path-neighborhood), referenced via `<DocLink>`.
+
+## Mental Model
+
+A widget is a per-session reactive primitive. One `WidgetRegistry` per process
+owns all registered types; one `WidgetSession` per user owns runtime instances.
+Sessions hold weak references to types so hot-reloading the registry doesn't
+strand sessions mid-flight.
+
+A **WidgetType** is a constructor + handler bundle registered at startup.
+_Avoid: "widget class" (used in earlier code; the bundle is not a class)._
+
+A **WidgetInstance** is a per-session realization of a WidgetType, identified
+by `(session_id, instance_id)`.
+
+## Registration
+
+`WidgetRegistry.register(name, ctor, handler)` accepts a unique name. Re-registration
+with the same name raises `RegistryConflict` — a process holds exactly one registry,
+and silent overwrite would let import order rotate which handler wins.
+
+## Dispatch Table
+
+| Event | Handler | Invariant |
+|-|-|-|
+| `widget.created` | `_on_created` | Idempotent against `instance_id` |
+| `widget.updated` | `_on_updated` | Last-writer-wins by `(instance_id, version)` |
+| `widget.destroyed` | `_on_destroyed` | Single-fire; second delivery is a no-op |
+
+## Cleanup Invariant
+
+Session teardown destroys widgets in reverse registration order. A widget's
+`cleanup()` cannot raise — exceptions are caught and logged, never propagated,
+because one widget's failure must not strand its siblings mid-teardown.
+
+## Cross-Boundary References
+
+| Concern | Owner |
+|-|-|
+| Session lifecycle | <DocLink path="/generic_docs/stack/widget/session_protocol" /> |
+| Event envelope shape | <DocLink path="/generic_docs/stack/sse/event_envelope_protocol" /> |
+```
+
+For canonical real-world references, consult the protocol files that ship with your project — they are load-bearing examples of the patterns above.

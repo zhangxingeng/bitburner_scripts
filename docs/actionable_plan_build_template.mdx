@@ -1,0 +1,94 @@
+---
+title: Actionable Plan Build Template
+description: "Use when turning a batch of rough, under-specified problems into actionable plan files — the upstream problem-to-plan loop covering the user-intent clarification gate, fan-out of read-only investigators (one plan file each), the actionable-plan shape, the status ledger, and the standing directives"
+essential: false
+---
+
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="Actionable Plan Build Template"
+  purpose="A paste-into-a-fresh-session prompt that runs the upstream half of a plan pipeline: rough problem notes become actionable plan files under .claude/work/plans/"
+  updateRules={[
+"The fenced body is a bootstrap — it carries the standing directives, the loop shape, and the where-to-look map; the execution mechanics live in the docs it links (parallel_agent_manager_protocol, worker usage principles)",
+"Update the standing directives section when project preferences change — it is the only home for those rules that is not a formal protocol",
+"The doc-specific instructions (which protocols to read, where plans live) are project-specific; keep them generic enough that a new project can customize them without rewriting the body"
+]}
+  agentGuidance={[
+"Paste the fenced body into a fresh top-level session to run the problem-to-plan loop",
+"The loop is a top-level orchestration session the user paste-launches; it fans out one investigation worker per problem and aggregates the plan files they write",
+"Count the problems in each input file yourself — a prior round nearly dropped a problem because a summary's count was wrong"
+]}
+/>
+
+<DocumentScope
+  includes={[
+"The problem-to-plan loop — clarify intent, fan out investigators, write plan files directly",
+"When to pause for user-intent clarification before dispatching investigation workers",
+"The actionable-plan shape — problem, root cause, approach, open decisions, verify",
+"The status ledger that tracks each plan through its lifecycle",
+"Standing user directives (project conventions, trivial-fix bar, multi-repo handling)"
+]}
+  excludes={[
+"The downstream half of the pipeline — turning plan files into shipped code (see actionable_plan_execution_template)",
+"The parallel-sweep mechanics this loop uses (see parallel_agent_manager_protocol)",
+"Worker usage, model choice, and artifact discipline (see the project's worker usage principles)"
+]}
+/>
+
+**Related:**
+
+* <DocLink path="/generic_docs/orchestration/multi_agent_principles" /> — the casting question behind the read-only investigator fan-out: each problem is a specifiable task, so investigators are cold subagents
+* <DocLink path="/generic_docs/orchestration/agent_coordination_protocol" /> — the cooperation grammar and bounded-return discipline the parallel fan-out rests on
+* <DocLink path="/generic_docs/orchestration/actionable_plan_execution_template" />
+* <DocLink path="/generic_docs/orchestration/parallel_agent_manager_protocol" />
+
+Paste the fenced body below into a **fresh** top-level session to run the upstream half of the plan pipeline: rough `*_problems.md` notes become actionable plan files under `.claude/work/plans/`. The downstream half — shipping those plans — is the <DocLink path="/generic_docs/orchestration/actionable_plan_execution_template" />.
+
+This pipeline is the lightweight path for a **batch of discrete fixes**. For a cohesive, multi-phase **full-feature build** whose design evolves during implementation, use the heavier 5-doc system instead — <DocLink path="/generic_docs/orchestration/multiagent_planning_protocol" />.
+
+Paste-launch this as a top-level session: it's an orchestration loop that fans out one investigation worker per problem and aggregates the plan files they write (<DocLink path="/generic_docs/orchestration/parallel_agent_manager_protocol" /> carries the fan-out mechanics). Two hazards the body details and you should know going in: **count each input file's problems yourself** (a summary's count can be wrong), and **clarify user-intent ambiguity before fanning out** (an investigator running from vague intent picks a direction the user didn't ask for).
+
+```markdown
+# Problem-to-plan loop
+
+You're picking up a repeatable loop, not a one-off task: turning a batch of rough, under-specified problems into actionable plan files. The sibling `orchestration/actionable_plan_execution_template` owns the downstream half (plan files → shipped code); this file owns the upstream half. Your project's core orientation docs load automatically — don't re-read what they cover. This file carries the loop, the standing directives that live nowhere else, and where to look. You are a competent peer: it passes paths and goals, not scripts.
+
+## The loop (each round)
+The user hands you a list of rough, under-specified problems. Per round:
+1. **Run the work loop** — dispatch `get-context` for any slice you'll touch. Don't skip it; the user has corrected agents for skipping it.
+2. **Clarify user intent before fanning out.** Per problem, ask yourself: would two competent readers write the same plan from these words? When yes, proceed. When no — because a *user-intent fork* hasn't been resolved (which UX shape the user wants, the scope of the fix, which goal wins when two goals conflict) — ask the user, grouped per problem, before dispatching that problem's investigator. Surface one question block per problem with multiple targeted questions inside, so the user resolves one fix at a time without losing the per-bug frame. Stage each resolved answer as a `Clarified intent:` line under the problem in the `*_problems.md` entry; the investigator folds it into the plan's `Problem:` statement so the intent is settled in the plan, not left as a ledger. *Why this gate sits upstream:* an investigator running on vague intent picks a code direction that fits its guess, the plan looks coherent at review, and the work gets rebuilt the round after — the same principle that closes open decisions before build, applied one step earlier. **Distinct from get-context territory:** if the question has a canonical answer (vendor convention, framework precedent, an existing project doc), decide — don't ask. Only user-intent forks earn the user-facing question; the standing decide-don't-ask and default-assume-a-doc-exists rules still bind everything else.
+3. **Fan out parallel investigation workers**, one per problem (or per surface-cluster). It's read-only investigation, so parallel is safe. Each agent finds the root cause in code (`file:line`), decides the fix direction, and **writes its plan DIRECTLY** into its OWN assigned file in `.claude/work/plans/`. **Assign each agent a distinct filename** so concurrent writes can't collide. Writing directly (vs returning a block to you) reduces churn.
+4. **Misc / minor items:** either a dedicated agent understands them and appends to a misc plan file, OR you fix on the spot **if genuinely trivial AND backed by a root-cause finding** (see directives). Surface the trivial-fix candidates to the user *before* fixing.
+5. Default workers to the project's build provider (profile: `build_provider`). Brief each with a task simulation (so its own get-context/docs-MCP navigation matches) and tell it which docs are already loaded.
+
+Fan-out mechanics: `orchestration/parallel_agent_manager_protocol` (file-disjoint ownership — one plan file per agent) and the project's worker usage principles (each investigator orients itself — it runs get-context or the docs MCP for its own sub-slice; you brief it with the problem and the task-specific context, not a pre-picked doc list).
+
+## Input for the next round
+The user drops their raw words into one or more `*_problems.md` files in `.claude/work/` (e.g. `another_user_written_problems.md`, `user_written_frontend_new_problems.md`). **Read each in full before planning — count the problems yourself; don't trust any summary's count, and don't assume one file = one problem** (a single paragraph can hold two asks; a two-line file can hold a real one). Hard-won: a prior handoff summary said "4 problems" while the raw file held 5 (the 5th, a single-vs-double-click edit inconsistency, nearly got dropped). **Lifecycle:** each problem is consumed into a named plan file under `.claude/work/plans/`; once a `*_problems.md` file is fully translated, the user has it **deleted** (confirm every problem maps to a plan first — trace before deleting). No `*_problems.md` files present → no new batch; ask the user.
+
+## Standing user directives (load-bearing — live nowhere else)
+- **Follow project conventions for the surface you're editing** — component libraries, styling approach, testing framework, and code organization are all governed by the project's protocols. Put this constraint in every plan.
+- **Trivial fix on the spot only when backed by a worker's root-cause diagnosis** — the user's bar: do it only if "you know the solution you provide is indeed the right solution, not a monkey patch." Otherwise it stays a plan. Always prompt the user with the trivial-fix candidates first.
+- **Workers may write plans directly**, each to a distinct assigned file — reduces churn vs returning blocks to the trunk.
+- **Plans are actionable**, not problem restatements: *Problem / Root cause (file:line) / Approach / Open decisions / Verify.* Match the shape of the existing files in the folder.
+- **Plan `Status:` is the round ledger** — values flow `needs design` → `ready to build` → `shipped, pending_review` → done. **Shipped-but-unverified code carries `pending_review`, never "done"** (the user verifies UI in-browser themselves); tag shipped bullets "PENDING REVIEW." Don't redo anything marked shipped/pending_review. A plan whose code shipped but whose doc/follow-up remains stays open with the remaining step called out.
+- **Respect the project's repo structure** — commit separately per independent repo surface. Standard repo rules in the project's orientation apply (work on the integration branch; commit only when asked; never drop uncommitted files without explicit approval).
+
+## Don't-redo state
+There is no round ledger here on purpose — a snapshot of "what's been done" goes stale the moment work moves and then misleads. The live truth is each plan's `Status:` line plus any misc file. Before starting a round, read those; don't trust a remembered summary.
+
+## Where to look if lost
+- Loop & dispatch: `orchestration/parallel_agent_manager_protocol`, the project's worker usage principles.
+- Shipping the plans once written: sibling `orchestration/actionable_plan_execution_template`.
+- Per-slice protocols: let `get-context` pick from the slice description rather than guessing stems — it's the entry point of the work loop.
+```
+
+---
+
+## Related Documentation
+
+* <DocLink path="/generic_docs/orchestration/actionable_plan_execution_template" /> — the downstream half of this pipeline
+* <DocLink path="/generic_docs/orchestration/parallel_agent_manager_protocol" /> — the fan-out mechanics this loop uses

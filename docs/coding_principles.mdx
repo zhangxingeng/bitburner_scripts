@@ -1,0 +1,198 @@
+---
+title: Coding Principles
+description: "Read before writing or reviewing code in any language — generic wisdom for type safety, trust boundaries, casts, exhaustive variants, immutability, identifiers, doc comments, helpers, soft-delete, coherent architecture, lint discipline, formatting"
+essential: true
+---
+
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import DocLink from "@components/DocLink.astro";
+
+<DocMeta
+  document="Coding Principles"
+  purpose="Single canonical source of language-agnostic coding wisdom — language protocols (Python, TypeScript) cover only the language flavor of each rule and link here for the principle"
+  updateRules={[
+"Add a rule only when it's genuinely language-agnostic — if it relies on a syntax or runtime quirk of one language, it belongs in that language's protocol",
+"Every rule names its failure mode in the same paragraph — no rule without its because",
+"If three sibling rules accumulate as language-specific deltas across both Python and TypeScript protocols, that's the rule-of-three trigger to promote the principle here"
+]}
+  agentGuidance={[
+"Read this before writing code in any language — language protocols only cover their flavor of these rules",
+"When you find yourself writing the same rule into both python_coding_protocol and typescript_coding_protocol, stop and put it here instead",
+"Headers tag _Best practice._ (objective, prevents a failure mode), _Style._ (preference, pick the simpler read), or _Convention._ (project-specific shared agreement)"
+]}
+/>
+
+<DocumentScope
+  includes={[
+"Generic principles that apply when writing code in any modern language",
+"The best-practice vs style framing every section uses",
+"Pointer rules to language-specific deltas in python_coding_protocol and typescript_coding_protocol"
+]}
+  excludes={[
+"Python-specific syntax, ruff rules, Pydantic patterns (see python_coding_protocol)",
+"TypeScript-specific syntax, eslint rules, Zod patterns, generated OpenAPI (see typescript_coding_protocol)",
+"Tool-config-vs-code decisions (see tool_friction_principles)"
+]}
+/>
+
+**Related:**
+
+* <DocLink path="/generic_docs/craft/code/python_coding_protocol">Python Coding Protocol</DocLink>
+* <DocLink path="/generic_docs/craft/code/typescript_coding_protocol">TypeScript Coding Protocol</DocLink>
+* <DocLink path="/generic_docs/craft/code/tool_friction_principles" />
+
+These are rules about how to think about code, not which keywords to type. Language protocols cover only the flavor each rule takes in their syntax.
+
+---
+
+## Principles
+
+**Best practice** rules prevent failure modes — don't bend. **Style** rules express taste — pick the simpler read. **Convention** rules are project-specific shared agreements — follow them so the team stays coherent. When best practice and style conflict, best practice wins. Each rule names its failure mode; if it's invisible for your case, ask before bending.
+
+---
+
+## Type Safety
+
+*Best practice.* Data with a known shape gets a defined type — never an untyped bag (`Any`, `dict[str, Any]`, `Record<string, any>`). One untyped value infects every downstream caller; the checker stops helping. If you can describe the keys and value types in a comment, you can describe them in a type — do it.
+
+Acceptable: erasing an unused generic at a boundary; framework-required arbitrary-value signatures (document inline); JSON immediately validated into a typed shape. Not acceptable: API responses, form values, store/state shapes — those have known structure and need a type.
+
+---
+
+## Trust Boundaries
+
+*Best practice.* Types are authored facts; runtime values aren't. At every boundary — API responses, webhooks, env vars, third-party callbacks, postMessage, URL params, AI/MCP tool inputs — type the input as the language's "I don't know yet" type (`unknown` in TS, `Any`-then-validate in Python) and validate it **once** into a known shape before passing it deeper.
+
+* Validate **once** at the boundary; trust the parsed type internally
+* Parse, don't validate — return the parsed value, not a boolean
+* Don't re-validate in inner code — that's noise, not safety
+
+The choice of validator (Zod / Pydantic / Valibot) is preference; the *practice* is not.
+
+---
+
+## Strict Mode
+
+*Best practice.* Turn on every safety check the language and its checker offer. Each disabled check is a failure mode someone has decided to accept silently. The language protocols list which specific flags to enable.
+
+---
+
+## Casts and Assertions
+
+*Best practice.* Unchecked casts are last resort. Reach for type guards, runtime parsing, or inference-preserving helpers (TS `satisfies`, Python `TypeGuard`/`isinstance`) before the language's "trust me" cast (TS `as`, Python `cast()`). An unchecked cast that's wrong compiles cleanly and crashes at first field access.
+
+Legitimate uses: post-validation `unknown`/raw input, runtime-typed primitives the checker can't see, single-site cast inside a branded-type factory. Outside those, a cast is a code smell.
+
+---
+
+## Exhaustive Variant Handling
+
+*Best practice.* When switching on a tagged or discriminated union, the default branch ends with an exhaustiveness assertion (TS: assigning the value to a `never`-typed name; Python: `assert_never` or `mypy --strict` match exhaustiveness). A new variant becomes a compile error instead of a silent fallthrough.
+
+Use a consistent discriminant name (`kind` or `type`) and string-literal values across the codebase.
+
+---
+
+## Immutability at Boundaries
+
+*Best practice.* Mark identifier and audit fields immutable on output DTOs (TS `readonly`, Python `frozen=True` Pydantic / `@dataclass(frozen=True)`). Use immutable-collection types for non-mutated parameters. Catches accidental in-place mutation and `.push`/`.append` on shared inputs.
+
+Immutability is shallow in most languages — it's a documentation-and-near-mutation guard, not a deep-freeze contract. Deep immutability is preference, not requirement.
+
+---
+
+## Branded Identifiers
+
+*Best practice for IDs that flow across module boundaries.* Structural typing lets `userId: string` and `productId: string` (or `int` IDs in Python) swap silently. Brand them — a nominal type the checker treats as distinct. Confine the single unsafe construction (the `as` cast or `NewType` wrapping) to one factory or validator per brand.
+
+Skip for values that never escape one function and for tiny apps where the indirection costs more than it prevents.
+
+---
+
+## Doc Comments
+
+*Style.* **One line. Multiline is a last resort** — only when the contract carries facts neither the signature nor reading the body would reveal. Types capture shape; the body shows behavior. The multiline doc-comment exists only for what survives both — and even then, a one-liner naming the key fact ("Parse foo. Throws on invalid X.") usually suffices.
+
+The bar for multiline — facts a careful reader of the body wouldn't reliably surface:
+
+|Trigger|Why types and the body don't say it|
+|-|-|
+|Specific exceptions/errors a caller must handle|Throw types aren't in the return signature|
+|Idempotency / retry safety|Return type reads identical for both|
+|Side effects on external systems|Pure and side-effecting share a signature|
+|Argument mutation vs new value|Void return doesn't say whether input is mutated|
+|Ordering / blocking / cancellation semantics|No type-system concept|
+
+What to leave out: parameter/return tags that just restate types (the signature is canonical); doc-comments paraphrasing the function name; multiline on a private helper with a clear name and types — privacy already signals internal, narrow contract.
+
+*Convention.* When a comment or docstring points to a doc, name it by **topic in natural language** ("see the external-API testing docs"), not a file path (`docs/craft/foo/svc_testing_insight.mdx`). A path couples this source to the doc tree's current shape: a docs reorg rots every embedded path silently — no compile error, no failed link, the reference just stops resolving. One themed-folder reorg orphaned ~24 such references at once. A topic pointer survives because it resolves by meaning, not location. (Doc→doc `<DocLink>` is exempt — the build validates those links, so breakage fails loudly instead of rotting; see <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol" section="11-no-volatile-references">High-Quality Documentation Patterns §11</DocLink>.)
+
+---
+
+## Helpers Over Inline Comments
+
+*Style.* When a block feels complex enough that you want an inline comment explaining what it does, the block usually wants to be an extracted helper instead. A well-named helper is self-documenting; an inline comment ages alongside code that drifts away from it.
+
+Independent of doc-comment policy — a multiline doc-comment on a function that should have been three functions is still a smell.
+
+---
+
+## Removing Code: `.old_code/` Soft-Delete
+
+*Convention.* For **major refactoring or removal of a whole file of significant core content**, soft-delete by moving to a sibling `.old_code/` directory — `foo/bar/service.py` becomes `foo/bar/.old_code/service.py`. Never import from `.old_code/`; it exists as an easy reference for the next refactor and is invisible to tooling.
+
+Simple deletes — small files, dead helpers, transient scaffolding — go direct with user approval. The soft-delete is for cases where the next refactor is likely to want the prior shape as a reference.
+
+Partial deletions (removing a function or block) are plain deletes — trace the dependency chain and remove tests, re-exports, shims, and translation layers at the same time. A clean refactor always beats a quick patch with a dangling alias.
+
+---
+
+## Coherent Architecture
+
+*Best practice.* When implementing new components, integrate cleanly and intentionally with the existing system. Maintain clear separation of concerns. If throttling belongs in the workflow engine, it lives there and is removed from elsewhere; if it belongs in the cache layer, it lives there — without duplicating the logic across components.
+
+Don't shape new code to "fit" the existing framework conveniently — design the new component properly first, then adapt existing code to support it gracefully. When updating or adding functionality, remove obsolete or redundant code; don't layer new logic on top of old. The goal is coherent maintainable architecture, not a collection of legacy parts stitched together.
+
+---
+
+## Obviousness
+
+*Best practice.* A file should read as one obvious thing — its surface (name, location, opening docstring) matching what it actually contains. When a reader thinks "this reads like it's for X, but it also quietly does Y," that confusion is the smell, not a failing of the reader; the next person should be able to trust a file's surface at a glance. A module whose contents contradict its advertised purpose installs a wrong mental model: someone refactors or deletes it as "just X" and silently drops the hidden Y concern — or rebuilds a duplicate of it elsewhere. Mixed-concern files are exactly where dead-vs-live and does-this-belong judgments go wrong, because the surface lies about the contents.
+
+---
+
+## Lint Suppression
+
+*Best practice.* Never suppress a warning unless there's truly no alternative. Fix the root cause:
+
+* Unused params → `_` prefix (matches the language's unused-name convention)
+* Type narrowing → type guard or runtime parse, not unchecked cast
+* Complexity warnings → extract a helper
+
+Read the rule's *reason* before reaching for the mechanical fix. Lint rules often point at a design issue a rename or reshuffle won't resolve. The pattern: when suppression feels tempting, the rule is usually telling you something about the code you haven't heard yet.
+
+When the rule is wrong because of framework or runtime semantics it can't see, the fix is in the **tool's config**, not in the code — see <DocLink path="/generic_docs/craft/code/tool_friction_principles" />.
+
+If suppression is genuinely the only option, report it before adding the comment. Silent suppression is never acceptable.
+
+---
+
+## Underscore Prefix Convention
+
+*Style.* `_` alone means "unused/throwaway"; `_name` means "private/internal." Don't repurpose for "temporary" or "intermediate." Don't encode type information in variable names (`session_or_none` for `T | None`) — let the type system handle it.
+
+---
+
+## Formatting Boundaries
+
+*Style.* Don't fixate on whitespace, spacing, indentation, quotes, semicolons, line breaks. The formatter (Prettier, Ruff format, Black) owns those. Focus on logic, structure, and clarity. If a formatter rewrites a diff you wrote, that's the formatter doing its job — don't fight it.
+
+---
+
+## Related Documentation
+
+* <DocLink path="/generic_docs/craft/code/python_coding_protocol">Python Coding Protocol</DocLink> — Python-specific deltas: PEP syntax, Pydantic, ruff rule names, TYPE\_CHECKING
+* <DocLink path="/generic_docs/craft/code/typescript_coding_protocol">TypeScript Coding Protocol</DocLink> — TypeScript-specific deltas: `any`/`unknown`, `satisfies`/`as`, `import type`, branded type syntax, generated OpenAPI types
+* <DocLink path="/generic_docs/craft/code/tool_friction_principles" /> — when a tool's complaint is the tool's problem, not the code's
+* <DocLink path="/generic_docs/craft/docs/high_quality_docs_protocol">High Quality Documentation Patterns</DocLink> — applies when writing doc-comments that double as published documentation

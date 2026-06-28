@@ -1,0 +1,225 @@
+---
+title: High Quality TypeScript Coding Rules
+description: "Read when writing TypeScript — `any`/`unknown` discipline, satisfies vs as, type-only imports, branded types, exhaustive switch, OpenAPI types, eslint rule names"
+essential: true
+---
+
+import DocLink from "@components/DocLink.astro";
+import DocMeta from "@components/DocMeta.astro";
+import DocumentScope from "@components/DocumentScope.astro";
+import { Aside } from "@astrojs/starlight/components";
+
+<DocMeta
+  document="TypeScript Coding Protocol"
+  purpose="Codify TypeScript-flavor deltas to coding_principles — any-discipline, strict flags, casts, unions, branded types, and the generated-OpenAPI integration"
+  updateRules={[
+"Update when a TS version bump changes default strict flags or enables new syntax",
+"Add a rule only when a real session burned time on the trap — speculative additions become noise",
+"Drop rules covered by coding_principles; link out rather than restate"
+]}
+  agentGuidance={[
+"Read before writing or refactoring frontend TypeScript — this covers only the deltas; coding_principles carries the shared rules",
+"Read the ESLint rule's intent before suppressing — no-explicit-any and react-hooks/exhaustive-deps almost never want suppression"
+]}
+/>
+
+<DocumentScope
+  includes={[
+"any / Record<string, any> discipline and the boundary where unknown belongs",
+"Compiler strict flags beyond strict: true",
+"satisfies vs as vs annotation; vendor-constraint casts",
+"Type-only imports and verbatimModuleSyntax",
+"Discriminated-union exhaustiveness, literal unions over enums, readonly at boundaries, branded types",
+"Generated OpenAPI types and the mock-fixture wrapper",
+"Lint suppression discipline"
+]}
+  excludes={[
+"Shared coding principles (see coding_principles)",
+"Framework-specific patterns (see your frontend framework's documentation)",
+"Python / backend rules",
+"Type-translation contract details (see type_translation_protocol)"
+]}
+/>
+
+TypeScript-specific deltas to <DocLink path="/generic_docs/craft/code/coding_principles" />. Read that first — it covers the principles (type safety, trust boundaries, casts, exhaustive variants, immutability, branded IDs, doc comments, etc.). This doc covers only the TypeScript flavor. Framework-specific patterns belong in your frontend framework's documentation.
+
+---
+
+## Type Safety: `any` and `Record<string, any>`
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="type-safety">Coding Principles — Type Safety</DocLink> prohibits untyped data with known shape. The TS flavor:
+
+* Never `any` or `Record<string, any>` for known-shape data — define an `interface`, `type`, or runtime schema
+* Library exports the type → import it; don't reinvent
+* Dynamic store → `Record<string, SpecificValue>`, never `Record<string, any>`
+* Genuinely need `any` (rare) → comment why inline; report it
+
+|Acceptable|Not acceptable|
+|-|-|
+|Erasing an unused generic at a boundary (`unknown`, not `any`)|API responses the UI reads — use the generated OpenAPI type|
+|Framework-required arbitrary-value signatures (document inline)|Form values submitted to the server — use the DTO|
+|JSON immediately validated into a typed shape|Store state read into typed bindings — use an explicit shape|
+
+---
+
+## Trust Boundaries: `unknown`
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="trust-boundaries">Coding Principles — Trust Boundaries</DocLink> is the rule. The TS flavor: type the input as `unknown` and validate with **Zod** (Valibot/ArkType for bundle/perf — choice is preference, validation is not).
+
+```ts
+// ✅ unknown in, parsed type out
+const raw: unknown = await fetch(url).then(r => r.json());
+return UserSchema.parse(raw);
+
+// ❌ assertion is a lie that compiles
+return fetch(url).then(r => r.json()) as Promise<User>;
+```
+
+---
+
+## Generated OpenAPI Types
+
+The backend owns the contract. A project-local command (profile: `generate_types_cmd`) regenerates types into the project's generated-types directory. Import from there for any cross-network shape. See the type-translation protocol for the contract↔generated relationship and overlap rules.
+
+The mock-fixture wrapper (`FetchResponse<paths>`) lives in the project's test utilities module; if you reach for `as never`, extend the helpers — ESLint enforces this.
+
+<Aside type="caution">
+  Don't block on generated types being "fresh." If the contract is agreed but the export hasn't run, write against a hand-authored contract type matching the agreed schema, then swap once the export runs.
+</Aside>
+
+---
+
+## Compiler Strict Flags
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="strict-mode">Coding Principles — Strict Mode</DocLink> is the rule. TS flavor — beyond `strict: true`, enable:
+
+|Flag|Catches|
+|-|-|
+|`noUncheckedIndexedAccess`|`arr[0]` typed `T` when it can be `undefined`|
+|`exactOptionalPropertyTypes`|Optional fields silently accepting explicit `undefined`|
+|`noImplicitOverride`|Subclass methods stranded after a parent rename|
+|`noFallthroughCasesInSwitch`|Missing `break` slipping through review|
+
+The first two ship as default in `tsc --init` since TS 5.9.
+
+---
+
+## Casts: `satisfies` vs `as`
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="casts-and-assertions">Coding Principles — Casts and Assertions</DocLink> is the rule. TS provides three tools with non-overlapping correct uses:
+
+|Tool|Use when|
+|-|-|
+|`: T` (annotation)|Reassignable variables; public function signatures; exported state shapes|
+|`satisfies T`|Validate against `T` while preserving narrower inferred literal/key types — config objects, route maps, in-code "databases"|
+|`as T`|You hold information the compiler doesn't: post-validation `unknown`, DOM narrowing, single-site cast inside a branded-type factory|
+
+```ts
+// ✅ satisfies preserves "/" as a literal type on routes.home
+const routes = { home: "/", about: "/about" } satisfies Record<string, string>;
+
+// ❌ annotation widens to string — narrowing gone
+const routes: Record<string, string> = { home: "/", about: "/about" };
+```
+
+### Vendor-Constraint Casts
+
+When a third-party library types a binding property more loosely than the discriminated union your code holds, you may need an inline cast at the binding boundary. The cast is scoped to that single binding site — the source variable's declared type is unchanged, so reads at every other site stay literal-typed. This is the cheapest faithful expression of the constraint; the alternative (widening the variable's type everywhere) propagates the looseness across the entire module.
+
+```tsx
+// The library types `value` as `string`, but we hold a literal union
+<Dropdown bind:value={status as string}>...</Dropdown>
+// status is still literal-typed everywhere else
+if (status === "active") { /* narrowed */ }
+```
+
+---
+
+## Type-Only Imports
+
+*Best practice.* `import type` (or inline `import { type X, y }`) for symbols used only in type positions; enable `verbatimModuleSyntax: true`. Without it, isolated transpilers (Vite, esbuild, SWC) can keep type-only imports as runtime `require`s, or drop side-effect imports the elider misjudges. Don't combine with the `consistent-type-imports` ESLint rule — pick one enforcer.
+
+```ts
+import type { User } from "./types";
+import { type User, fetchUser } from "./api";  // inline form
+```
+
+---
+
+## Discriminated Unions: `assertNever`
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="exhaustive-variant-handling">Coding Principles — Exhaustive Variant Handling</DocLink> is the rule. TS flavor: end the default branch with an exhaustiveness assertion. A new variant becomes a compile error instead of a silent fallthrough.
+
+```ts
+type Shape = { kind: "circle"; r: number } | { kind: "square"; side: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.r ** 2;
+    case "square": return s.side ** 2;
+    default: { const _: never = s; throw new Error(`unhandled: ${_}`); }
+  }
+}
+```
+
+Use a consistent discriminant (`kind` or `type`) and string literals — not enums (see below). Large unions: `ts-pattern`'s `.exhaustive()`.
+
+---
+
+## Literal Unions Over Enums
+
+*Best practice.* For new code, string literal unions or `as const` objects. `enum` emits runtime IIFEs (breaks under type-stripping runtimes — Bun, Deno, Node native TS, SWC erasable mode); `const enum` adds isolated-module footguns; numeric `enum` produces opaque values in logs and DB rows.
+
+```ts
+type Status = "active" | "paused" | "archived";
+
+// When you need values at runtime:
+const Status = { Active: "active", Paused: "paused", Archived: "archived" } as const;
+type Status = (typeof Status)[keyof typeof Status];
+```
+
+Don't mass-migrate existing enums; refactor opportunistically.
+
+---
+
+## `readonly` at Boundaries
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="immutability-at-boundaries">Coding Principles — Immutability at Boundaries</DocLink> is the rule. TS flavor: mark `id`, `createdAt`, and audit fields `readonly` on DTOs; use `readonly T[]` / `ReadonlyArray<T>` for non-mutated parameters and collection fields.
+
+```ts
+interface User {
+  readonly id: string;
+  readonly createdAt: string;
+  email: string;  // mutable
+}
+function summarize(items: readonly Item[]): string { ... }
+```
+
+---
+
+## Branded Types
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="branded-identifiers">Coding Principles — Branded Identifiers</DocLink> is the rule. TS pattern:
+
+```ts
+type UserId = string & { readonly __brand: "UserId" };
+type OrderId = string & { readonly __brand: "OrderId" };
+
+function getUser(id: UserId): User { ... }
+getUser(orderId);  // ❌ wrong brand
+```
+
+Confine the single `as` cast to one factory or validator per brand (or `z.string().brand<"UserId">()`).
+
+---
+
+## Lint Suppression
+
+<DocLink path="/generic_docs/craft/code/coding_principles" section="lint-suppression">Coding Principles — Lint Suppression</DocLink> covers the rule. TS application:
+
+* Unused params → `_` prefix
+* Type narrowing → type guard or `satisfies`, not `as T`
+* Complexity warning → extract a helper
+* Never `// @ts-ignore`, `// @ts-expect-error`, `// eslint-disable-*` without genuine cause
+
+Read the rule's *reason* before reaching for the mechanical fix — `no-explicit-any` and `react-hooks/exhaustive-deps` almost never want suppression; they want the shape defined or the dependency used.
