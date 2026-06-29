@@ -32,7 +32,7 @@ bridge for Claude. *(viteburner = optional future evaluation.)*
 
 - **P1 Foundation** — `lib/*` established; `ns_dodge` = RAM-dodge primitive; `servers` merges BFS+enumeration+cache; `config` holds flat phase constants + `DesignPhase` enum + `SCRIPT_PATHS`.
 - **P2a Compute engine** — `compute/*` from old `engine/`; `HackingConfig` + `batch_util` dissolved; `ram_manager` kept separate (breaks a circular dep).
-- **P2b Workers + infra** — `workers/*`; `pserv_manager` (merged purchase_server+upgrade_home), `hacknet_manager`, `spreader`; all `/tools//deploy/` paths rewired.
+- **P2b Workers + infra** — `workers/*`; `pserv_manager` (merged purchase_server+upgrade_home), `hacknet_manager`, `spreader`; all `/tools/` and `/deploy/` paths rewired.
 - **P3 Cross-cutting** — `phase_detector` extracted from old `strategy_agent` (its remote-execution logic abandoned; phase-read folded into `coordinator`); `game_agent/boot_agent/reporter` moved; `notification` (notify-and-wait) added.
 - **P4 Stock** — existing dual-mode 4S/pre-4S engine KEPT (already matches alainbryden 75-tick model); `contracts/stock.ts`→`stock/main.ts`; phase-gated launch in coordinator; positions published to `PORT_STOCK`; API-wait-loop fix.
 - **P5 Player** — six Thread-P modules (Singularity via `ns_dodge`); `aug_planner` full impl (cascade ×1.9, topo deps, cheapest-rep-first) publishes `PORT_AUGS` → `phase_detector` RESET trigger.

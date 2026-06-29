@@ -60,7 +60,7 @@ notification and waits. Full-auto orchestration is a later phase.
 ## 3. Foundation Libraries (build first — everything depends on these)
 
 - `lib/ports` — named port constants + peek/pop/set helpers + bus protocol (register/lock/event)
-- `lib/nsDodge` — `getNsDataThroughFile` RAM-dodge wrapper (THE enabling primitive)
+- `lib/ns_dodge` — `getNsDataThroughFile` RAM-dodge wrapper (THE enabling primitive)
 - `lib/servers` — BFS discovery, Server cache w/ resetCaches() per loop
 - `lib/format` — `fmt` tagged template (use `ns.formatNumber`, not deprecated `nFormat`)
 - `lib/config` — all tunable thresholds (phase boundaries, budgets, reserves) in one place
