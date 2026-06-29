@@ -24,6 +24,12 @@ const pendingSync = new Set<string>();
 const adminSockets = new Set<WebSocket>();
 const adminPending = new Map<number, { adminSocket: WebSocket; adminId: number }>();
 
+// Control agent state (port 12527)
+let controlSocket: WebSocket | null = null;
+const controlPending = new Map<number, { adminSocket: WebSocket; adminId: number }>();
+let nextControlId = 1;
+const latestState: Record<string, { ts: number; data: unknown }> = {};
+
 // ── Helpers ──
 
 function log(tag: string, msg: string) {
@@ -400,17 +406,56 @@ adminWss.on("connection", (socket: WebSocket) => {
   adminSockets.add(socket);
 
   socket.on("message", (data) => {
-    if (!gameSocket || gameSocket.readyState !== 1) {
-      socket.send(JSON.stringify({
-        jsonrpc: "2.0",
-        id: null,
-        error: "Game not connected",
-      }));
-      return;
-    }
     try {
       const req = JSON.parse(data.toString());
       if (req.method === undefined) return;
+
+      // control.* methods handled locally — game socket not required
+      if (typeof req.method === "string" && req.method.startsWith("control.")) {
+        const reply = (result?: unknown, error?: string) =>
+          socket.send(JSON.stringify({
+            jsonrpc: "2.0",
+            id: req.id,
+            ...(error !== undefined ? { error } : { result }),
+          }));
+
+        switch (req.method) {
+          case "control.status":
+            reply({ controlConnected: controlSocket?.readyState === 1 });
+            break;
+          case "control.state":
+            reply(latestState[req.params?.channel] ?? null);
+            break;
+          case "control.cmd":
+            if (!controlSocket || controlSocket.readyState !== 1) {
+              reply(undefined, "control agent not connected");
+            } else {
+              const cid = nextControlId++;
+              controlPending.set(cid, { adminSocket: socket, adminId: req.id });
+              controlSocket.send(JSON.stringify({
+                t: "cmd",
+                id: cid,
+                method: req.params?.method,
+                params: req.params?.params,
+              }));
+            }
+            break;
+          default:
+            reply(undefined, "unknown control method");
+        }
+        return;
+      }
+
+      // Non-control: forward to the RFA game socket
+      if (!gameSocket || gameSocket.readyState !== 1) {
+        socket.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: req.id ?? null,
+          error: "Game not connected",
+        }));
+        return;
+      }
+
       const internalId = nextId++;
       adminPending.set(internalId, { adminSocket: socket, adminId: req.id });
       gameSocket.send(JSON.stringify({
@@ -444,6 +489,66 @@ adminWss.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 log("ADMIN", "Admin server listening on port 12526");
+
+// ── Control agent WebSocket server (port 12527) ──
+// The in-game control_agent connects here; bridge forwards control.* admin requests over this socket.
+
+const controlWss = new WebSocketServer({ port: 12527 });
+
+controlWss.on("connection", (socket: WebSocket) => {
+  log("CONTROL", "Control agent connected");
+  controlSocket = socket;
+
+  socket.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.t === "res") {
+        const entry = controlPending.get(msg.id);
+        if (entry) {
+          controlPending.delete(msg.id);
+          if (entry.adminSocket.readyState === 1) {
+            entry.adminSocket.send(JSON.stringify({
+              jsonrpc: "2.0",
+              id: entry.adminId,
+              ...(msg.ok ? { result: msg.data } : { error: msg.error }),
+            }));
+          }
+        }
+      } else if (msg.t === "state") {
+        latestState[msg.channel] = { ts: msg.ts, data: msg.data };
+      }
+    } catch { /* ignore malformed */ }
+  });
+
+  socket.on("close", () => {
+    log("CONTROL", "Control agent disconnected");
+    controlSocket = null;
+    // Flush any admin clients still waiting on a control response
+    for (const [id, entry] of controlPending) {
+      if (entry.adminSocket.readyState === 1) {
+        entry.adminSocket.send(JSON.stringify({
+          jsonrpc: "2.0",
+          id: entry.adminId,
+          error: "control agent disconnected",
+        }));
+      }
+      controlPending.delete(id);
+    }
+  });
+
+  socket.on("error", (err) => {
+    log("CONTROL", `Error: ${err.message}`);
+  });
+});
+
+controlWss.on("error", (err: NodeJS.ErrnoException) => {
+  log("ERR", `Control server error: ${err.message}`);
+  if (err.code === "EADDRINUSE") {
+    console.error("Control port 12527 is already in use.");
+  }
+});
+
+log("CONTROL", "Control server listening on port 12527");
 
 if (oneshot) {
   log("MODE", "One-shot — pushing all files then exiting");

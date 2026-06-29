@@ -55,6 +55,12 @@ export const HOME_RAM_RESERVE_MIN = 100;
 export const MIN_SERVER_RAM = 2;
 /** Whether to include home in the worker pool. */
 export const HOME_RAM_USE = true;
+/**
+ * Minimum free home RAM (GB) to keep available when the orchestrator decides whether
+ * a daemon fits.  Prevents the orchestrator from consuming every last byte and leaving
+ * no headroom for small one-shot tasks or subsequent phase-detector re-reads.
+ */
+export const DAEMON_LAUNCH_RESERVE = 2;
 
 // ── Targeting thresholds ──────────────────────────────────────────────────────
 
@@ -76,6 +82,8 @@ export const SCRIPT_PATHS = {
     autoGrow:       '/workers/auto_grow.js',
     share:          '/workers/share.js',
     simpleHackLoop: '/workers/simple_hack_loop.js',
+    // root — lean BOOTSTRAP entry; fits fresh 8 GB home, hands off to coordinator
+    bootstrap:      '/bootstrap.js',
     // compute/ — orchestrators and infrastructure daemons
     coordinator:    '/compute/coordinator.js',
     pservManager:   '/compute/pserv_manager.js',
@@ -86,6 +94,7 @@ export const SCRIPT_PATHS = {
     gameAgent:      '/cross/game_agent.js',
     bootAgent:      '/cross/boot_agent.js',
     reporter:       '/cross/reporter.js',
+    launcher:       '/cross/launcher.js',
     // stock/ — income engine (Phase 4); phase-gated EARLY+
     stockEngine:    '/stock/main.js',
     // player/ — Thread-P user-invoked modules (Phase 5); NOT auto-launched by coordinator
@@ -99,6 +108,50 @@ export const SCRIPT_PATHS = {
 
 /** Base RAM cost per worker script thread (GB). */
 export const SCRIPT_RAM_COST = 1.75;
+
+// ── Daemon catalog (managed by bootstrap.ts orchestrator) ─────────────────────
+//
+// Each entry declares the daemon path and the earliest DesignPhase at which it
+// may be spawned.  The orchestrator walks this list each tick and calls ns.exec
+// once the phase gate is satisfied, home has free RAM ≥ scriptRam + DAEMON_LAUNCH_RESERVE,
+// and the daemon is not already running.  Order matters: earlier entries launch first.
+
+/**
+ * Map a DesignPhase to a comparable rank so minPhase threshold comparisons work
+ * on the string enum.  BOOTSTRAP=0, EARLY=1, MID=2, LATE=3, RESET=4.
+ *
+ * Using a regular function declaration so it hoists above DAEMON_CATALOG below.
+ */
+export function phaseRank(phase: DesignPhase): number {
+    switch (phase) {
+        case DesignPhase.BOOTSTRAP: return 0;
+        case DesignPhase.EARLY:     return 1;
+        case DesignPhase.MID:       return 2;
+        case DesignPhase.LATE:      return 3;
+        case DesignPhase.RESET:     return 4;
+    }
+}
+
+/**
+ * Ordered list of infrastructure daemons owned by the orchestrator (`bootstrap.ts`).
+ * `minPhase` is the earliest phase at which the daemon is eligible to launch.
+ * `key` is a human-readable label (used in log output; not checked at runtime).
+ */
+export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase }[] = [
+    // ── BOOTSTRAP — runs even at 8–16 GB home ────────────────────────────────
+    // NOTE: spreader is a one-shot utility (exits after scan), NOT a persistent
+    // daemon.  The orchestrator inlines BFS-nuke via its own nukeAndScan() each
+    // tick; the spreader script is only needed as a periodic external call.
+    { key: 'hacknetManager', path: SCRIPT_PATHS.hacknetManager,  minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'phaseDetector',  path: SCRIPT_PATHS.phaseDetector,   minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'bootAgent',      path: SCRIPT_PATHS.bootAgent,       minPhase: DesignPhase.BOOTSTRAP },
+    // ── EARLY — available once home > PHASE_RAM_EARLY (16 GB) ────────────────
+    { key: 'pservManager',   path: SCRIPT_PATHS.pservManager,    minPhase: DesignPhase.EARLY     },
+    { key: 'gameAgent',      path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY     },
+    { key: 'stockEngine',    path: SCRIPT_PATHS.stockEngine,     minPhase: DesignPhase.EARLY     },
+    // ── MID — heavy batch engine (~15.85 GB import footprint); fits at ≥ 64 GB ─
+    { key: 'coordinator',    path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID       },
+];
 
 // ── Batch operation constants ─────────────────────────────────────────────────
 

@@ -51,6 +51,25 @@ auto-decide — we recommend and wait.*
 
 ---
 
+## 2.5 The Capability Boundary — act as a human, through human surfaces
+
+**We automate player *action*, not data *access*. The system may do anything a human player can do —
+and nothing more.** It touches the game only through the two surfaces a real player+scripter has:
+the **Netscript API** (incl. Singularity — the game's sanctioned scripting feature) and the **UI**
+(clicks, terminal input, navigation). It must **never inspect or alter the engine's internal data** —
+no scraping React/JS state, no mutating game objects, no reading the save or hidden/RNG state.
+
+- **Allowed:** NS/Singularity calls; UI interfacing (clicks + terminal keystrokes a human performs);
+  reading any information the game already shows a player.
+- **Forbidden:** reaching past those surfaces to read or change data not exposed to a normal player.
+
+This is the north star for *how* we act. The DOM/`document` path (used by the contained launcher) is a
+**UI-interfacing tool, not a data tool**. See [04-player-automation-and-control.md](04-player-automation-and-control.md)
+for the full mechanism list, the contained-launcher law, the gray-area ruling on the RAM-penalty dodge,
+and the MCP control surface that makes play hands-free.
+
+---
+
 ## 3. The Notification System
 
 When a Player-thread module needs an action it cannot or should not perform autonomously,
@@ -109,8 +128,10 @@ Research must find the natural boundaries and the signal used to detect each tra
 
 See [01-research-synthesis.md](01-research-synthesis.md) §1 for detail. Short answers:
 
-1. **Player-action mechanism:** Singularity API wrapped in a RAM-dodge
-   (`getNsDataThroughFile`). DOM-clicking only for the casino. → Thread-P = Singularity + RAM-dodge.
+1. **Player-action mechanism:** Two legitimate surfaces under the §2.5 capability boundary — the
+   **Singularity API** (RAM-dodged, SF4+) for API-driven Thread-P actions, and **UI interfacing** via a
+   single contained DOM launcher (`cross/launcher.ts`) for what the API can't reach (casino, pre-SF4) and
+   for ~0-RAM script launching. Full spec: [04-player-automation-and-control.md](04-player-automation-and-control.md).
 2. **Early-game Player automation:** Confirmed — *unavailable* before SourceFile-4 (scripts
    self-terminate). Bridge is casino blackjack → stocks. Pre-SF4 income = stocks + hacking;
    Thread-P early = notify-and-wait + user-invoked modules.

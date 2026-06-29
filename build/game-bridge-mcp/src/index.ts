@@ -4,6 +4,10 @@
  *
  * Connects to the bridge admin port (ws://localhost:12526), proxies JSON-RPC
  * requests to the game, and exposes game state as MCP tools for Claude.
+ *
+ * Control tools (terminal, get_screen, get_notifications, write_port, read_port)
+ * prefer the real-time control channel (admin control.* methods, ~1–5 ms) and
+ * fall back to the legacy file-relay path when the control agent is not connected.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -100,6 +104,65 @@ function ensureConnected(): Promise<void> {
     });
   }
   return connectPromise;
+}
+
+// ── Control channel helpers ──
+
+/** Thrown by controlCmd when the control agent is not connected or disconnected mid-call. */
+class ControlUnavailable extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "ControlUnavailable";
+  }
+}
+
+const CONTROL_UNAVAILABLE_MSGS = new Set([
+  "control agent not connected",
+  "control agent disconnected",
+]);
+
+/**
+ * Forward a command to the in-game control agent via the bridge control.cmd admin method.
+ * Throws ControlUnavailable if the control agent is not connected; re-throws other errors.
+ */
+async function controlCmd(method: string, params?: unknown): Promise<unknown> {
+  try {
+    return await rpc("control.cmd", { method, params });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (CONTROL_UNAVAILABLE_MSGS.has(msg)) throw new ControlUnavailable(msg);
+    throw err;
+  }
+}
+
+/** Read a buffered state channel from the bridge (no game round-trip). */
+function controlState(channel: string): Promise<unknown> {
+  return rpc("control.state", { channel });
+}
+
+/** Query whether the control agent is currently connected to the bridge. */
+function controlStatus(): Promise<unknown> {
+  return rpc("control.status");
+}
+
+/**
+ * Slow-path file relay: push a command to status/.cmd.json and poll status/.result.json.
+ * Used as fallback for write_port, read_port, and terminal when the control agent is down.
+ * Latency: ~400–600 ms across four async hops.
+ */
+async function fileRelay(cmd: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  await rpc("pushFile", { server: "home", filename: "status/.cmd.json", content: JSON.stringify(cmd) });
+  for (let i = 0; i < 25; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      const raw = (await rpc("getFile", { server: "home", filename: "status/.result.json" })) as string;
+      if (raw && typeof raw === "string") {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed.id === cmd.id) return parsed;
+      }
+    } catch { /* keep polling */ }
+  }
+  return null;
 }
 
 // ── MCP Server ──
@@ -390,12 +453,68 @@ Args:
   }
 );
 
+// Tool: terminal
+const TerminalSchema = z.object({
+  command: z.string().min(1).describe("Terminal command to inject (e.g., 'ls', 'run /cross/game_agent.js')"),
+}).strict();
+
+server.registerTool(
+  "terminal",
+  {
+    title: "Inject Terminal Command",
+    description: `Inject a command into the Bitburner in-game terminal.
+
+Args:
+  - command (string): The terminal command to run
+
+Fast path: ~1–5 ms when the control agent is connected (ws://localhost:12527).
+Slow fallback: ~400–600 ms file-relay path when the control agent is down.
+
+Returns { injected: true } on the fast path. Notes when the slow fallback was used.
+This replaces the legacy write_port(12, cmd) injection idiom.`,
+    inputSchema: TerminalSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  async ({ command }) => {
+    await ensureConnected();
+    try {
+      const result = (await controlCmd("terminal", { command })) as { injected: boolean };
+      return {
+        content: [{ type: "text", text: JSON.stringify({ injected: result.injected }) }],
+        structuredContent: { injected: result.injected, path: "control" },
+      };
+    } catch (err) {
+      if (!(err instanceof ControlUnavailable)) throw err;
+      // Fallback: write command to port 12 via file relay; the PORT_LAUNCHER drains it and injects
+      const cmd = { id: `terminal_${Date.now()}`, method: "writePort", port: 12, data: command };
+      const result = await fileRelay(cmd);
+      if (!result) {
+        return { content: [{ type: "text", text: "[fallback] Timeout waiting for game_agent response" }] };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: `[fallback: slow file-relay path used — control agent not connected] ${JSON.stringify(result)}`,
+          },
+        ],
+        structuredContent: { ...result, path: "file-relay" },
+      };
+    }
+  }
+);
+
 // Tool: get_status
 server.registerTool(
   "get_status",
   {
     title: "Game Bridge Status",
-    description: `Check whether the game is connected to the bridge and the admin connection status.`,
+    description: `Check whether the game is connected to the bridge, and report control agent status.`,
     inputSchema: z.object({}).strict(),
     annotations: {
       readOnlyHint: true,
@@ -416,12 +535,19 @@ server.registerTool(
       }
     }
     let gameConnected = false;
+    let controlConnected = false;
     if (connected) {
       try {
         await rpc("getFileNames", { server: "home" });
         gameConnected = true;
       } catch {
         gameConnected = false;
+      }
+      try {
+        const statusResult = (await controlStatus()) as { controlConnected: boolean };
+        controlConnected = statusResult.controlConnected ?? false;
+      } catch {
+        controlConnected = false;
       }
     }
     return {
@@ -431,10 +557,11 @@ server.registerTool(
           text: JSON.stringify({
             bridgeAdmin: connected ? "connected" : "disconnected",
             game: gameConnected ? "connected" : "disconnected",
+            controlAgent: controlConnected ? "connected" : "disconnected",
           }),
         },
       ],
-      structuredContent: { bridgeAdmin: connected, game: gameConnected },
+      structuredContent: { bridgeAdmin: connected, game: gameConnected, controlConnected },
     };
   }
 );
@@ -511,7 +638,7 @@ server.registerTool(
   "read_port",
   {
     title: "Read Bitburner Game Port",
-    description: `Read data from a game port via the game_agent command relay.
+    description: `Read data from a game port.
 
 Ports are used for in-game IPC:
 - Port 1: Boot agent commands
@@ -519,7 +646,8 @@ Ports are used for in-game IPC:
 - Port 3: Strategy agent heartbeat
 - Port 4: Strategy agent decision log
 
-Uses the game_agent file-based command relay. May take 1-5 seconds.`,
+Fast path via control agent: ~1–5 ms.
+Slow fallback via file relay: ~400–600 ms when the control agent is down.`,
     inputSchema: ReadPortSchema,
     annotations: {
       readOnlyHint: true,
@@ -530,32 +658,23 @@ Uses the game_agent file-based command relay. May take 1-5 seconds.`,
   },
   async ({ port, peek }) => {
     await ensureConnected();
-
-    // Send command via game_agent relay
-    const cmd = { id: `readPort_${Date.now()}`, method: peek ? "peekPort" : "readPort", port };
-    await rpc("pushFile", { server: "home", filename: "status/.cmd.json", content: JSON.stringify(cmd) });
-
-    // Poll for result (up to 5 seconds)
-    let result = null;
-    for (let i = 0; i < 25; i++) {
-      await new Promise((r) => setTimeout(r, 200));
-      try {
-        const raw = (await rpc("getFile", { server: "home", filename: "status/.result.json" })) as string;
-        if (raw && typeof raw === "string") {
-          const parsed = JSON.parse(raw);
-          if (parsed.id === cmd.id) {
-            result = parsed;
-            break;
-          }
-        }
-      } catch { /* keep polling */ }
+    try {
+      const value = await controlCmd(peek ? "peekPort" : "readPort", { port });
+      return {
+        content: [{ type: "text", text: JSON.stringify(value) }],
+        structuredContent: { port, peek, value },
+      };
+    } catch (err) {
+      if (!(err instanceof ControlUnavailable)) throw err;
+      // Fallback: file relay
+      const cmd = { id: `readPort_${Date.now()}`, method: peek ? "peekPort" : "readPort", port };
+      const result = await fileRelay(cmd);
+      if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
     }
-
-    if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
-    return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      structuredContent: result,
-    };
   }
 );
 
@@ -569,9 +688,13 @@ server.registerTool(
   "write_port",
   {
     title: "Write to Bitburner Game Port",
-    description: `Write data to a game port via the game_agent command relay.
+    description: `Write data to a game port.
 
-Use this to send commands to the boot agent on port 1, or write data to any port for in-game scripts to consume.`,
+Use this to send commands to the boot agent on port 1, or write data to any port for in-game scripts to consume.
+
+Fast path via control agent: ~1–5 ms. Returns { success: true, evicted } where evicted is the
+value displaced from a full port, or null on a clean write.
+Slow fallback via file relay: ~400–600 ms when the control agent is down.`,
     inputSchema: WritePortSchema,
     annotations: {
       readOnlyHint: false,
@@ -582,30 +705,89 @@ Use this to send commands to the boot agent on port 1, or write data to any port
   },
   async ({ port, data }) => {
     await ensureConnected();
-
-    const cmd = { id: `writePort_${Date.now()}`, method: "writePort", port, data };
-    await rpc("pushFile", { server: "home", filename: "status/.cmd.json", content: JSON.stringify(cmd) });
-
-    // Poll for result
-    let result = null;
-    for (let i = 0; i < 25; i++) {
-      await new Promise((r) => setTimeout(r, 200));
-      try {
-        const raw = (await rpc("getFile", { server: "home", filename: "status/.result.json" })) as string;
-        if (raw && typeof raw === "string") {
-          const parsed = JSON.parse(raw);
-          if (parsed.id === cmd.id) {
-            result = parsed;
-            break;
-          }
-        }
-      } catch { /* keep polling */ }
+    try {
+      const res = (await controlCmd("writePort", { port, data })) as { evicted: unknown };
+      const out = { success: true, evicted: res.evicted ?? null };
+      return {
+        content: [{ type: "text", text: JSON.stringify(out) }],
+        structuredContent: out,
+      };
+    } catch (err) {
+      if (!(err instanceof ControlUnavailable)) throw err;
+      // Fallback: file relay (corrected semantics: write always succeeds; data = evicted or null)
+      const cmd = { id: `writePort_${Date.now()}`, method: "writePort", port, data };
+      const result = await fileRelay(cmd);
+      if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
+      // Normalize to corrected semantics: success is always true; data holds the evicted value (or null)
+      const out = { success: true, evicted: result.data ?? null };
+      return {
+        content: [{ type: "text", text: JSON.stringify(out) }],
+        structuredContent: out,
+      };
     }
+  }
+);
 
-    if (!result) return { content: [{ type: "text", text: "Timeout waiting for game_agent response" }] };
+// Tool: get_screen
+server.registerTool(
+  "get_screen",
+  {
+    title: "Get Game Screen",
+    description: `Read the current rendered terminal screen from the game.
+
+Returns { ts, text } where ts is the Unix timestamp of the last screen capture and text is the
+rendered terminal content pushed by the control agent (~every 1 s).
+
+Returns a note when no screen state has been received yet (control agent not yet connected or
+hasn't pushed a screen frame). For an RFA fallback, use read_file on status/screen.txt.`,
+    inputSchema: z.object({}).strict(),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  async () => {
+    await ensureConnected();
+    const state = (await controlState("screen")) as { ts: number; data: string } | null;
+    if (!state) {
+      return {
+        content: [{ type: "text", text: "No screen state yet — control agent has not pushed a screen capture." }],
+        structuredContent: { ts: null, text: null },
+      };
+    }
     return {
-      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      structuredContent: result,
+      content: [{ type: "text", text: state.data }],
+      structuredContent: { ts: state.ts, text: state.data },
+    };
+  }
+);
+
+// Tool: get_notifications
+server.registerTool(
+  "get_notifications",
+  {
+    title: "Get Game Notifications",
+    description: `Read the latest buffered notifications from the game.
+
+Returns the array of notifications from the most recent state push by the control agent.
+Returns an empty array if no notifications have been received yet.`,
+    inputSchema: z.object({}).strict(),
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  async () => {
+    await ensureConnected();
+    const state = (await controlState("notifications")) as { ts: number; data: unknown[] } | null;
+    const notifications = state?.data ?? [];
+    return {
+      content: [{ type: "text", text: JSON.stringify(notifications, null, 2) }],
+      structuredContent: { ts: state?.ts ?? null, notifications },
     };
   }
 );

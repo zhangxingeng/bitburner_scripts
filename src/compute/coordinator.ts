@@ -19,31 +19,21 @@ import {
     INTERVAL_PORT_OPENER_S,
     INTERVAL_SHARE_S,
 } from '../lib/config';
-import { PORT_PHASE, PORT_DECISION, PORT_STOCK, peekPort, pushPort } from '../lib/ports';
+import { PORT_PHASE, PORT_DECISION, peekPort, pushPort } from '../lib/ports';
 import { RamManager } from './ram_manager';
 import { TargetSelector, isServerPrepared, getTargetServers } from './target_selector';
 import { BatchHackManager } from './hwgw_batcher';
 import { ThreadDistributionManager } from './scheduler';
 import { execMulti } from './exec_multi';
 
-// ── Orchestrator-level paths for maintenance daemons ─────────────────────────
-// Phase 2b: pservManager, hacknetManager, spreader moved from tools/ to compute/.
-// Port openers remain in tools/ (Phase 5 owns that move).
-
-const DAEMON_PATHS = {
-    pservManager:   '/compute/pserv_manager.js',   // buy/upgrade pservs + home RAM
-    hacknetManager: '/compute/hacknet_manager.js',  // ROI-based hacknet upgrades
-    spreader:       '/compute/spreader.js',         // BFS root + propagate
-    buyPortOpener:  '/player/program_acquirer.js',   // moved from /tools/port_openers.js (Phase 5)
-    phaseDetector:  '/cross/phase_detector.js',     // publishes DesignPhase to PORT_PHASE
-    gameAgent:      '/cross/game_agent.js',         // MCP file-based command relay
-    bootAgent:      '/cross/boot_agent.js',         // Port-based IPC relay
-    stockEngine:    '/stock/main.js',               // Phase 4 — income EARLY+; publishes PORT_STOCK
-} as const;
+// NOTE: daemon lifecycle (spreader, hacknetManager, phaseDetector, bootAgent,
+// pservManager, gameAgent, stockEngine, and this coordinator itself) is now owned
+// entirely by the lean orchestrator in `bootstrap.ts`.  Coordinator is a pure
+// batch engine: it is launched by the orchestrator at MID phase and does NOT
+// spawn or respawn any infrastructure daemons.
 
 const FEATURES = {
-    enableShare:               true,
-    enableAutoServerPurchase:  true,
+    enableShare: true,
 } as const;
 
 // ── Status panel helpers (dissolved from engine/batch_util.ts) ────────────────
@@ -109,13 +99,13 @@ function calcHomeRamReservation(ns: NS, minOverride?: number): number {
 
 async function nukeAll(ns: NS): Promise<void> {
     try {
-        const pid = ns.exec(DAEMON_PATHS.spreader, 'home', 1);
+        const pid = ns.exec(SCRIPT_PATHS.spreader, 'home', 1);
         for (let i = 0; i < 1000 && ns.isRunning(pid); i++) await ns.sleep(100);
     } catch (e) { ns.print(`WARN: nukeAll failed: ${String(e)}`); }
 }
 
 async function buyPortOpeners(ns: NS): Promise<void> {
-    try { ns.exec(DAEMON_PATHS.buyPortOpener, 'home', 1); }
+    try { ns.exec(SCRIPT_PATHS.programAcquirer, 'home', 1); }
     catch (e) { ns.print(`WARN: buyPortOpeners: ${String(e)}`); }
 }
 
@@ -229,17 +219,10 @@ export async function main(ns: NS): Promise<void> {
 
     const batchManager = new BatchHackManager(ns, threadManager);
 
-    // Initial nuke pass + launch persistent daemons
-    // stockEngine is NOT launched here: it requires phase >= EARLY (read in loop).
+    // Initial nuke pass (all daemon lifecycle is owned by bootstrap.ts orchestrator)
     await nukeAll(ns);
-    if (!ns.isRunning(DAEMON_PATHS.phaseDetector, 'home')) ns.exec(DAEMON_PATHS.phaseDetector, 'home', 1);
-    if (!ns.isRunning(DAEMON_PATHS.gameAgent,     'home')) ns.exec(DAEMON_PATHS.gameAgent,     'home', 1);
-    if (!ns.isRunning(DAEMON_PATHS.bootAgent,     'home')) ns.exec(DAEMON_PATHS.bootAgent,     'home', 1);
-    if (FEATURES.enableAutoServerPurchase &&
-        !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))  ns.exec(DAEMON_PATHS.pservManager,  'home', 1);
-    if (!ns.isRunning(DAEMON_PATHS.hacknetManager, 'home')) ns.exec(DAEMON_PATHS.hacknetManager, 'home', 1);
 
-    ns.print('Coordinator started');
+    ns.print('Coordinator (batch engine) started — daemon lifecycle owned by bootstrap.ts orchestrator');
 
     let tick = 0;
     let lastNukeTime        = 0;
@@ -273,10 +256,9 @@ export async function main(ns: NS): Promise<void> {
                 lastPhase = currentPhase;
             }
 
-            // Ensure phaseDetector is still alive (respawn if killed)
-            if (!ns.isRunning(DAEMON_PATHS.phaseDetector, 'home')) ns.exec(DAEMON_PATHS.phaseDetector, 'home', 1);
-
             // ── Periodic maintenance ──────────────────────────────────────────
+            // Daemon lifecycle (phaseDetector, stockEngine, pservManager, etc.) is
+            // owned by the bootstrap.ts orchestrator — coordinator does NOT respawn them.
             if (sec - lastNukeTime >= INTERVAL_NUKE_S) {
                 await nukeAll(ns);
                 lastNukeTime = sec;
@@ -284,26 +266,6 @@ export async function main(ns: NS): Promise<void> {
             if (sec - lastPortOpenerTime >= INTERVAL_PORT_OPENER_S) {
                 await buyPortOpeners(ns);
                 lastPortOpenerTime = sec;
-            }
-            // Ensure persistent infrastructure daemons are alive (respawn if killed)
-            if (!ns.isRunning(DAEMON_PATHS.gameAgent,      'home')) ns.exec(DAEMON_PATHS.gameAgent,      'home', 1);
-            if (!ns.isRunning(DAEMON_PATHS.bootAgent,      'home')) ns.exec(DAEMON_PATHS.bootAgent,      'home', 1);
-            if (FEATURES.enableAutoServerPurchase &&
-                !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))   ns.exec(DAEMON_PATHS.pservManager,   'home', 1);
-            if (!ns.isRunning(DAEMON_PATHS.hacknetManager, 'home')) ns.exec(DAEMON_PATHS.hacknetManager,  'home', 1);
-
-            // ── Stock engine (Phase 4) — phase-gated EARLY+ ──────────────────
-            // stock/main.ts handles its own API-purchase wait loop, so we just
-            // ensure it's alive once we leave BOOTSTRAP.  It publishes positions
-            // to PORT_STOCK each cycle (stock↔hack coupling, publish half done).
-            // TODO(design): read PORT_STOCK here and set isLong/isShort flags on
-            //   hack targets so the batcher biases grow→longs and hack→shorts
-            //   (Zharay market-manipulation coupling, zharay.md §"Coordinator integration").
-            //   PORT_STOCK carries [{sym, long, short, profitPotential, profitChange}].
-            //   Do NOT build the biasing now — it touches the settled batcher (Phase 5+).
-            if (currentPhase !== DesignPhase.BOOTSTRAP &&
-                !ns.isRunning(DAEMON_PATHS.stockEngine, 'home')) {
-                ns.exec(DAEMON_PATHS.stockEngine, 'home', 1);
             }
 
             // ── RAM snapshot ─────────────────────────────────────────────────

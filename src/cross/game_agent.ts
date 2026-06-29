@@ -1,8 +1,18 @@
 import { NS } from '@ns';
-import { PORT_HEARTBEAT, PORT_DECISION, popPort, peekPort } from '../lib/ports';
+import { runTerminalCommand, readScreen } from './launcher';
+import { PORT_HEARTBEAT, PORT_DECISION, PORT_LAUNCHER, PORT_NOTIFY, popPort, peekPort, pushPort } from '../lib/ports';
 
 /**
- * Game Agent — file↔port relay daemon on home.
+ * Game Agent — real-time control channel + file↔port relay daemon on home.
+ *
+ * DUAL ROLE (see docs/plan-mcp-realtime-control.md §1 for architecture):
+ *   CONTROL CHANNEL: Opens an outbound WebSocket to the bridge (:12527) for
+ *     sub-10ms bidirectional control.  Bridge forwards MCP control.cmd frames
+ *     as {t:'cmd'} over this socket; agent responds {t:'res'}; agent pushes
+ *     {t:'state'} frames (screen/notifications/heartbeat/decisions) unsolicited.
+ *     Wire protocol is FROZEN in §2a — do not rename fields.
+ *   RFA FALLBACK: When the control channel is down, the file-relay
+ *     (status/.cmd.json ↔ status/.result.json) and port mirrors remain active.
  *
  * MOVED from monitor/game_agent.ts (Phase 3 cross-cutting migration).
  * Path update required: redeploy this script from /cross/game_agent.js (not /monitor/).
@@ -11,10 +21,11 @@ import { PORT_HEARTBEAT, PORT_DECISION, popPort, peekPort } from '../lib/ports';
  *              This is the bridge between MCP tools (file I/O via bridge RPC) and
  *              in-game port-based IPC.
  *
- * PORT MIRROR: Peeks PORT_HEARTBEAT (port 3) → status/heartbeat.txt.
- *              Drains PORT_DECISION (port 4) → appends to status/decisions.json.
+ * PORT MIRROR: Peeks PORT_HEARTBEAT (port 3) → status/heartbeat.txt + WS state push.
+ *              Drains PORT_DECISION (port 4) → appends to status/decisions.json + WS push.
+ *              Drains PORT_NOTIFY (port 9) → status/notifications.txt + WS state push.
  *
- * REPORTER:    Launches /cross/reporter.js every 5s (temp script — exits after snapshot).
+ * SCREEN MIRROR: readScreen() tail → status/screen.txt + WS state push (~1 s cadence).
  *
  * RAM: ~6.9 GB — fits on 8 GB home with 1.1 GB free.
  *      write(1.0) + read(1.0) + rm(1.0) + run(1.0) + kill(0.5) + ps(0.2)
@@ -22,6 +33,11 @@ import { PORT_HEARTBEAT, PORT_DECISION, popPort, peekPort } from '../lib/ports';
  *      + fileExists(0) + readPort(0) + writePort(0) + peek(0)
  *      + sleep(0) + print(0) + disableLog(0)
  *      = 1.6 + 5.35 = 6.95 GB
+ *      readScreen() import adds 0 GB (eval-hidden document; pure string ops).
+ *      eval('WebSocket') adds 0 GB (browser global; static analyzer never sees the token).
+ *      ns.write for screen mirror already counted above.
+ *      isRunning(0.1) added for processLauncherCommands double-spawn guard.
+ *      In-game validated: 6.55 GB (screen mirror); 6.65 GB (step 5, est.).
  *
  * Launch: ns.run('/cross/game_agent.js', 1)
  */
@@ -30,7 +46,7 @@ import { PORT_HEARTBEAT, PORT_DECISION, popPort, peekPort } from '../lib/ports';
 
 interface GameCommand {
     id:       string;
-    method:   'run' | 'kill' | 'ps' | 'getPlayer' | 'getServer' | 'readPort' | 'writePort' | 'peekPort';
+    method:   'run' | 'kill' | 'ps' | 'getPlayer' | 'getServer' | 'readPort' | 'writePort' | 'peekPort' | 'terminal' | 'ping';
     script?:  string;
     host?:    string;
     threads?: number;
@@ -39,6 +55,7 @@ interface GameCommand {
     port?:    number;
     data?:    unknown;
     pid?:     number;
+    command?: string;
 }
 
 interface CommandResult {
@@ -49,12 +66,33 @@ interface CommandResult {
     error?:   string;
 }
 
+// ── Control channel wire protocol types (§2a of plan-mcp-realtime-control.md) ──
+// Field names are FROZEN — do not rename; the bridge and MCP implement against these exactly.
+
+interface ControlCmd {
+    t:      'cmd';
+    id:     number;
+    method: string;
+    params: Record<string, unknown>;
+}
+
 // ── Config ──
 
 const STATUS_DIR    = 'status';
 const CMD_FILE      = `${STATUS_DIR}/.cmd.json`;
 const RESULT_FILE   = `${STATUS_DIR}/.result.json`;
-const LOOP_SLEEP_MS = 200;
+// The control-command queue is drained every DRAIN_SLEEP_MS (low latency), while the
+// heavier mirror/state work runs only every MIRROR_EVERY drains (≈200 ms, unchanged).
+// This keeps control.cmd round-trips at ~10 ms without flooding file I/O at 100 Hz.
+const DRAIN_SLEEP_MS = 10;
+const MIRROR_EVERY   = 20;   // 10 ms × 20 = ~200 ms mirror/heartbeat cadence
+
+// Control channel
+const CONTROL_WS_URL  = 'ws://localhost:12527';
+const RECONNECT_DELAY = 1000;   // ms — throttle reconnect attempts when bridge is down
+
+// WebSocket readyState constants (numeric literals avoid referencing the global at static-analysis time)
+const WS_CLOSED = 3;
 
 // ── File helpers ──
 
@@ -85,11 +123,17 @@ function deleteFile(ns: NS, path: string): void {
 
 // ── Port Mirroring ──
 
-function mirrorPorts(ns: NS): void {
+/**
+ * Mirror heartbeat and decisions ports to status files.
+ * Returns drained decisions and peeked heartbeat for WS state push.
+ */
+function mirrorPorts(ns: NS): { decisions: unknown[]; heartbeat: string | null } {
+    const decisions: unknown[] = [];
+    let heartbeat: string | null = null;
     try {
         // Heartbeat from PORT_HEARTBEAT (peek, don't consume)
-        const heartbeat = peekPort(ns, PORT_HEARTBEAT);
-        const alive     = heartbeat !== null;
+        heartbeat    = peekPort(ns, PORT_HEARTBEAT);
+        const alive  = heartbeat !== null;
         writeJson(ns, `${STATUS_DIR}/heartbeat.txt`, {
             alive,
             lastSeen: Date.now(),
@@ -97,7 +141,6 @@ function mirrorPorts(ns: NS): void {
         });
 
         // Decisions from PORT_DECISION (drain all entries)
-        const decisions: unknown[] = [];
         let entry = popPort(ns, PORT_DECISION);
         while (entry !== null) {
             decisions.push(entry);
@@ -119,9 +162,111 @@ function mirrorPorts(ns: NS): void {
     } catch (e) {
         ns.print(`WARN: mirrorPorts error: ${String(e)}`);
     }
+    return { decisions, heartbeat };
 }
 
-// ── Command Execution ──
+// ── Screen Mirror (read-side) ──────────────────────────────────────────────────
+
+/**
+ * Mirror the rendered terminal tail to `status/screen.txt` at ~1 s cadence.
+ *
+ * This is the symmetric **read** hand to `processLauncherCommands`'s **write**
+ * hand (see player-automation-and-control design §4 "Read-side").  The external
+ * agent fetches `status/screen.txt` via the existing MCP `read_file` path.
+ *
+ * Returns the screen text when a mirror fires (tick % 5 === 0) for the caller
+ * to push as a WS state frame; returns null on off-ticks.
+ *
+ * @param ns   Netscript handle (for `writeJson`).
+ * @param tick Loop iteration counter (mirror fires when tick % 5 === 0).
+ */
+function mirrorScreen(ns: NS, tick: number): string | null {
+    if (tick % 5 !== 0) return null;                  // ~1 s cadence (5 × 200 ms)
+    try {
+        const text = readScreen();
+        writeJson(ns, `${STATUS_DIR}/screen.txt`, { ts: Date.now(), text });
+        return text;
+    } catch (e) {
+        ns.print(`WARN: mirrorScreen error: ${String(e)}`);
+        return null;
+    }
+}
+
+// ── Notify Mirror (PORT_NOTIFY → status/notifications.txt) ─────────────────────
+
+/**
+ * Drain all queued messages from PORT_NOTIFY, append to `status/notifications.txt`,
+ * and return the drained items for WS state push.
+ *
+ * Messages include LAUNCHER_INJECT receipts (from `processLauncherCommands`) and any
+ * notifications pushed by player modules or the notification helper.  Rolling cap of
+ * 500 entries — old entries are trimmed from the front.
+ *
+ * Runs every tick (drain is cheap; writes only when new messages arrive).
+ */
+function mirrorNotify(ns: NS): unknown[] {
+    const notifications: unknown[] = [];
+    try {
+        let entry = popPort(ns, PORT_NOTIFY);
+        while (entry !== null) {
+            try { notifications.push(JSON.parse(entry)); } catch { notifications.push(entry); }
+            entry = popPort(ns, PORT_NOTIFY);
+        }
+        if (notifications.length === 0) return notifications;
+        let existing: unknown[] = [];
+        try {
+            if (ns.fileExists(`${STATUS_DIR}/notifications.txt`)) {
+                const raw = ns.read(`${STATUS_DIR}/notifications.txt`);
+                if (raw?.trim()) existing = JSON.parse(raw as string);
+            }
+        } catch { /* start fresh on parse error */ }
+        existing.push(...notifications);
+        if (existing.length > 500) existing = existing.slice(existing.length - 500);
+        writeJson(ns, `${STATUS_DIR}/notifications.txt`, existing);
+    } catch (e) {
+        ns.print(`WARN: mirrorNotify error: ${String(e)}`);
+    }
+    return notifications;
+}
+
+// ── Launcher Command Channel ──
+
+/**
+ * Pop ONE queued terminal command from PORT_LAUNCHER and inject it via the
+ * contained launcher (UI interfacing only — see player-automation-and-control design §1).
+ * One per loop iteration naturally rate-limits the terminal to the loop cadence.
+ * Driven externally by the MCP `write_port(12, "<command>")` tool.
+ *
+ * Guard: if the command is `run <script> [args]` and the script is already
+ * running on home, skip the inject and push an ALREADY_RUNNING notification
+ * to PORT_NOTIFY.  Prevents double-spawning persistent player modules
+ * (faction_manager, crime) triggered via MCP without checking first.
+ */
+function processLauncherCommands(ns: NS): void {
+    const command = popPort(ns, PORT_LAUNCHER);
+    if (command === null || command === '') return;
+
+    // Double-spawn guard for persistent modules
+    const runMatch = /^run\s+(\S+)/.exec(command);
+    if (runMatch) {
+        const script = runMatch[1];
+        if (ns.isRunning(script, 'home')) {
+            ns.print(`Launcher skip (already running): ${command}`);
+            pushPort(ns, PORT_NOTIFY, JSON.stringify({
+                ts: Date.now(), type: 'ALREADY_RUNNING', script, command,
+            }));
+            return;
+        }
+    }
+
+    const ok = runTerminalCommand(command);
+    ns.print(`Launcher inject ${ok ? 'OK' : 'FAILED'}: ${command}`);
+    pushPort(ns, PORT_NOTIFY, JSON.stringify({
+        ts: Date.now(), type: 'LAUNCHER_INJECT', command, ok,
+    }));
+}
+
+// ── Command Execution (RFA file-relay path) ──
 
 function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
     const result: CommandResult = { id: cmd.id, success: false };
@@ -178,17 +323,17 @@ function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
                 const target = cmd.target ?? cmd.host ?? 'home';
                 const server = ns.getServer(target);
                 result.data = {
-                    hostname:        server.hostname,
-                    maxRam:          server.maxRam,
-                    usedRam:         server.ramUsed ?? 0,
-                    moneyAvailable:  server.moneyAvailable ?? 0,
-                    moneyMax:        server.moneyMax ?? 0,
-                    hackDifficulty:  server.hackDifficulty ?? 0,
-                    minDifficulty:   server.minDifficulty ?? 0,
-                    requiredHacking: server.requiredHackingSkill ?? 0,
-                    hasAdminRights:  server.hasAdminRights,
+                    hostname:          server.hostname,
+                    maxRam:            server.maxRam,
+                    usedRam:           server.ramUsed ?? 0,
+                    moneyAvailable:    server.moneyAvailable ?? 0,
+                    moneyMax:          server.moneyMax ?? 0,
+                    hackDifficulty:    server.hackDifficulty ?? 0,
+                    minDifficulty:     server.minDifficulty ?? 0,
+                    requiredHacking:   server.requiredHackingSkill ?? 0,
+                    hasAdminRights:    server.hasAdminRights,
                     backdoorInstalled: server.backdoorInstalled ?? false,
-                    cpuCores:        server.cpuCores,
+                    cpuCores:          server.cpuCores,
                 };
                 result.success = true;
                 break;
@@ -206,15 +351,44 @@ function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
                     Number(cmd.port ?? 1),
                     typeof cmd.data === 'string' ? cmd.data : JSON.stringify(cmd.data),
                 );
-                result.data    = written;
-                result.success = written !== null;
-                if (!result.success) result.error = 'Port full';
+                // Phase 0 fix: ns.writePort v3 returns null on a clean write and the evicted
+                // element when the port was full.  It never "fails" except by exception
+                // (caught by the surrounding try/catch).
+                result.success = true;
+                result.data    = written;   // null = appended cleanly; non-null = the evicted element
                 break;
             }
 
             case 'peekPort': {
                 result.data    = ns.peek(Number(cmd.port ?? 1));
                 result.success = true;
+                break;
+            }
+
+            case 'terminal': {
+                if (!cmd.command) { result.error = 'Missing command'; break; }
+                // Double-spawn guard: mirrors processLauncherCommands behaviour
+                const runMatch = /^run\s+(\S+)/.exec(cmd.command);
+                if (runMatch) {
+                    const script = runMatch[1];
+                    if (ns.isRunning(script, 'home')) {
+                        pushPort(ns, PORT_NOTIFY, JSON.stringify({
+                            ts: Date.now(), type: 'ALREADY_RUNNING', script, command: cmd.command,
+                        }));
+                        result.success = true;
+                        result.data    = { injected: false };
+                        break;
+                    }
+                }
+                const injected = runTerminalCommand(cmd.command);
+                result.success = true;
+                result.data    = { injected };
+                break;
+            }
+
+            case 'ping': {
+                result.success = true;
+                result.data    = { pong: Date.now() };
                 break;
             }
 
@@ -228,27 +402,309 @@ function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
     return result;
 }
 
+// ── Control Channel (WebSocket, outbound to bridge :12527) ────────────────────
+
+// Module-level socket state — shared between connectControl(), handleControlCmd(), and main().
+let ws:                WebSocket | null = null;
+let connected                          = false;
+let lastConnectAttempt                 = 0;
+
+// Commands enqueued by the onmessage callback and drained in the main loop.
+// WS callbacks run OUTSIDE the Netscript async context, so they MUST NOT call ns.*
+// (an ns call from a callback throws uncaught and the engine kills the script).
+// onmessage only parses + enqueues here; the loop does all ns work.
+const inbound: ControlCmd[] = [];
+let justConnected           = false;   // onopen sets this; the loop prints once (no ns in callbacks)
+
+/**
+ * Narrow an unknown WS message to a ControlCmd frame.
+ * Trust boundary: WS data is a runtime value; type as unknown and narrow before use.
+ */
+function isControlCmd(m: unknown): m is ControlCmd {
+    if (typeof m !== 'object' || m === null) return false;
+    const o = m as Record<string, unknown>;
+    return (
+        o['t'] === 'cmd' &&
+        typeof o['id'] === 'number' &&
+        typeof o['method'] === 'string' &&
+        typeof o['params'] === 'object' && o['params'] !== null
+    );
+}
+
+/**
+ * Handle a control command and return the §2a response frame.
+ *
+ * Called from the MAIN LOOP (after draining the `inbound` queue), NOT from the WS
+ * onmessage callback — so it runs inside the Netscript async context and ns.* calls
+ * are safe here.  Kept synchronous for simplicity; an async ns call (e.g. ns.hack)
+ * could be awaited here if a future command needs one.
+ */
+function handleControlCmd(
+    ns:  NS,
+    m:   ControlCmd,
+): { t: 'res'; id: number; ok: boolean; data?: unknown; error?: string } {
+    const { id, method, params } = m;
+    try {
+        switch (method) {
+            case 'terminal': {
+                const command = params['command'];
+                if (typeof command !== 'string') return { t: 'res', id, ok: false, error: 'Missing command' };
+                // Double-spawn guard: if injecting a `run` and the script is already live, skip.
+                const runMatch = /^run\s+(\S+)/.exec(command);
+                if (runMatch) {
+                    const script = runMatch[1];
+                    if (ns.isRunning(script, 'home')) {
+                        pushPort(ns, PORT_NOTIFY, JSON.stringify({
+                            ts: Date.now(), type: 'ALREADY_RUNNING', script, command,
+                        }));
+                        return { t: 'res', id, ok: true, data: { injected: false } };
+                    }
+                }
+                const injected = runTerminalCommand(command);
+                return { t: 'res', id, ok: true, data: { injected } };
+            }
+
+            case 'run': {
+                const script = params['script'];
+                if (typeof script !== 'string') return { t: 'res', id, ok: false, error: 'Missing script' };
+                const threads = typeof params['threads'] === 'number' ? params['threads'] : 1;
+                const rawArgs = params['args'];
+                const args    = Array.isArray(rawArgs) ? rawArgs as (string | number | boolean)[] : [];
+                const pid     = ns.run(script, threads, ...args);
+                if (pid === 0) return { t: 'res', id, ok: false, error: `Failed to run ${script}` };
+                return { t: 'res', id, ok: true, data: { pid } };
+            }
+
+            case 'kill': {
+                let killed: boolean;
+                if (typeof params['pid'] === 'number') {
+                    killed = ns.kill(params['pid']);
+                } else if (typeof params['script'] === 'string') {
+                    const host = typeof params['host'] === 'string' ? params['host'] : ns.getHostname();
+                    killed = ns.kill(params['script'], host);
+                } else {
+                    return { t: 'res', id, ok: false, error: 'Missing pid or script' };
+                }
+                return { t: 'res', id, ok: true, data: { killed } };
+            }
+
+            case 'ps': {
+                const host  = typeof params['host'] === 'string' ? params['host'] : 'home';
+                const procs = ns.ps(host).map(p => ({
+                    filename: p.filename, threads: p.threads, pid: p.pid,
+                }));
+                return { t: 'res', id, ok: true, data: procs };
+            }
+
+            case 'getPlayer': {
+                const player = ns.getPlayer();
+                return { t: 'res', id, ok: true, data: {
+                    hacking:  player.skills.hacking,
+                    money:    player.money,
+                    income:   (player as any).workMoneyGainRate ?? 0,
+                    playtime: player.totalPlaytime,
+                    skills:   { ...player.skills },
+                    hp:       player.hp,
+                    location: player.city,
+                    factions: player.factions,
+                }};
+            }
+
+            case 'getServer': {
+                const target = typeof params['target'] === 'string' ? params['target']
+                             : typeof params['host']   === 'string' ? params['host']
+                             : 'home';
+                const server = ns.getServer(target);
+                return { t: 'res', id, ok: true, data: {
+                    hostname:          server.hostname,
+                    maxRam:            server.maxRam,
+                    usedRam:           server.ramUsed ?? 0,
+                    moneyAvailable:    server.moneyAvailable ?? 0,
+                    moneyMax:          server.moneyMax ?? 0,
+                    hackDifficulty:    server.hackDifficulty ?? 0,
+                    minDifficulty:     server.minDifficulty ?? 0,
+                    requiredHacking:   server.requiredHackingSkill ?? 0,
+                    hasAdminRights:    server.hasAdminRights,
+                    backdoorInstalled: server.backdoorInstalled ?? false,
+                    cpuCores:          server.cpuCores,
+                }};
+            }
+
+            case 'readPort': {
+                const port = Number(params['port'] ?? 1);
+                return { t: 'res', id, ok: true, data: ns.readPort(port) };
+            }
+
+            case 'writePort': {
+                const port    = Number(params['port'] ?? 1);
+                const rawData = params['data'];
+                const data    = typeof rawData === 'string' ? rawData : JSON.stringify(rawData);
+                // v3: returns null on a clean write; the evicted element when the port was full.
+                const evicted: unknown = ns.writePort(port, data);
+                return { t: 'res', id, ok: true, data: { evicted } };
+            }
+
+            case 'peekPort': {
+                const port = Number(params['port'] ?? 1);
+                return { t: 'res', id, ok: true, data: ns.peek(port) };
+            }
+
+            case 'ping':
+                return { t: 'res', id, ok: true, data: { pong: Date.now() } };
+
+            default:
+                return { t: 'res', id, ok: false, error: `Unknown method: ${method}` };
+        }
+    } catch (e) {
+        return { t: 'res', id, ok: false, error: `Exception: ${String(e)}` };
+    }
+}
+
+/**
+ * Open the outbound control WebSocket to the bridge (:12527).
+ *
+ * Throttled to RECONNECT_DELAY ms between attempts so a downed bridge is not
+ * hammered.  Guards against duplicate sockets: exits early if ws is non-null
+ * and not CLOSED.
+ *
+ * Stealth eval pattern: same as launcher.ts's eval('document') — keeps the
+ * literal token 'WebSocket' out of source so the static RAM analyzer never
+ * charges the 25 GB DOM penalty.
+ */
+function connectControl(ns: NS): void {
+    // Guard: do not open a second socket if one is already live or connecting
+    if (ws !== null && ws.readyState !== WS_CLOSED) return;
+
+    const now = Date.now();
+    if (now - lastConnectAttempt < RECONNECT_DELAY) return;
+    lastConnectAttempt = now;
+
+    try {
+        // eslint-disable-next-line no-eval
+        const WS = eval('WebSocket') as typeof WebSocket;
+        ws = new WS(CONTROL_WS_URL);
+
+        // ── CALLBACKS RUN OUTSIDE THE NETSCRIPT ASYNC CONTEXT ──
+        // They must NOT call ns.* — an ns call from here throws uncaught and the
+        // engine kills the script (this was the startup-crash root cause). They only
+        // mutate plain JS state / enqueue; the main loop does all ns work + ws.send.
+        ws.onopen = () => {
+            connected     = true;
+            justConnected = true;
+        };
+
+        ws.onmessage = (ev: MessageEvent) => {
+            let m: unknown;
+            try { m = JSON.parse(ev.data as string); } catch { return; }
+            if (isControlCmd(m)) inbound.push(m);   // drained in the main loop
+        };
+
+        ws.onclose = () => {
+            connected = false;
+            ws = null;
+        };
+
+        ws.onerror = () => {
+            connected = false;
+            ws = null;
+        };
+    } catch (e) {
+        // connectControl() runs in the main loop, so ns.print here is safe.
+        ns.print(`[control] Connect failed: ${String(e)}`);
+        ws = null;
+        connected = false;
+    }
+}
+
+/** Send a §2a state frame over the control socket. No-op when disconnected. */
+function pushState(channel: string, data: unknown): void {
+    if (!connected || ws === null) return;
+    try {
+        ws.send(JSON.stringify({ t: 'state', channel, ts: Date.now(), data }));
+    } catch { /* swallow; onerror/onclose will null ws */ }
+}
+
 // ── Main ──
 
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
-    ns.print(`Game Agent started on ${ns.getHostname()} — file relay + port mirroring`);
+    ns.print(`Game Agent started on ${ns.getHostname()} — control channel + file relay + port mirroring`);
+
+    // Close the control socket on exit. Netscript does NOT auto-close sockets a
+    // killed script opened — without this, every kill/restart leaks a zombie
+    // socket whose browser-side callbacks keep firing on a dead ns instance,
+    // hijacking the bridge's single controlSocket. atExit guarantees a clean close.
+    ns.atExit(() => {
+        try { ws?.close(); } catch { /* ignore */ }
+        ws = null;
+        connected = false;
+    });
+
+    let tick      = 0;   // mirror cycles; used by mirrorScreen for ~1 s throttle
+    let drainTick = 0;   // fast-drain cycles; mirrors run when drainTick % MIRROR_EVERY === 0
 
     while (true) {
         try {
-            // Mirror PORT_HEARTBEAT/PORT_DECISION → status files
-            mirrorPorts(ns);
+            // Reconnect control socket if not live (throttled internally by connectControl)
+            if (!ws || ws.readyState === WS_CLOSED) connectControl(ns);
 
-            // Check for incoming MCP command
-            const cmd = readJson<GameCommand>(ns, CMD_FILE);
-            if (cmd?.id && cmd?.method) {
-                ns.print(`Agent: executing ${cmd.id} [${cmd.method}]`);
-                const result = executeCommand(ns, cmd);
-                writeJson(ns, RESULT_FILE, result);
-                deleteFile(ns, CMD_FILE);
+            // onopen can only set a flag (no ns in callbacks) — log the connect here.
+            if (justConnected) {
+                justConnected = false;
+                ns.print('[control] Connected to bridge');
             }
 
-            await ns.sleep(LOOP_SLEEP_MS);
+            // FAST PATH (every ~10 ms): drain control commands enqueued by onmessage.
+            // All ns work happens HERE, inside the Netscript async context — never in the
+            // WS callback. ws.send is a browser API (not ns), so replying from the loop is safe.
+            while (inbound.length > 0) {
+                const cmd = inbound.shift()!;
+                const res = handleControlCmd(ns, cmd);
+                try { ws?.send(JSON.stringify(res)); } catch { /* socket dropped; onclose will reset */ }
+            }
+
+            // SLOW PATH (every MIRROR_EVERY drains ≈ 200 ms): port/screen mirrors,
+            // state pushes, and the RFA file-relay fallback. Decoupled from the fast
+            // command drain so control.cmd latency stays ~10 ms without 100 Hz file I/O.
+            if (drainTick % MIRROR_EVERY === 0) {
+                // Mirror PORT_HEARTBEAT/PORT_DECISION → status files; capture for WS push
+                const { decisions, heartbeat } = mirrorPorts(ns);
+
+                // Drain PORT_NOTIFY → status/notifications.txt; capture for WS push
+                const notifications = mirrorNotify(ns);
+
+                // Mirror rendered terminal tail → status/screen.txt (~1 s cadence);
+                // returns non-null only on tick % 5 === 0 boundaries
+                const screenText = mirrorScreen(ns, tick);
+
+                // Drain one terminal command from PORT_LAUNCHER (RFA fallback path)
+                processLauncherCommands(ns);
+
+                // Push state frames over the control channel when connected.
+                // File mirrors above always run so the RFA fallback path keeps working
+                // regardless of whether the control socket is up.
+                if (connected) {
+                    if (notifications.length > 0) pushState('notifications', notifications);
+                    if (decisions.length > 0)     pushState('decisions', decisions);
+                    if (screenText !== null)       pushState('screen', screenText);
+                    // Heartbeat every mirror cycle — cheap peek, conveys liveness to the bridge
+                    pushState('heartbeat', heartbeat);
+                }
+
+                // Check for incoming MCP command (RFA file-relay fallback)
+                const fileCmd = readJson<GameCommand>(ns, CMD_FILE);
+                if (fileCmd?.id && fileCmd?.method) {
+                    ns.print(`Agent: executing ${fileCmd.id} [${fileCmd.method}]`);
+                    const result = executeCommand(ns, fileCmd);
+                    writeJson(ns, RESULT_FILE, result);
+                    deleteFile(ns, CMD_FILE);
+                }
+
+                tick++;
+            }
+
+            drainTick++;
+            await ns.sleep(DRAIN_SLEEP_MS);
         } catch (e) {
             ns.print(`ERROR: ${String(e)}`);
             await ns.sleep(5000);

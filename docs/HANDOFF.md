@@ -10,7 +10,32 @@
 - A full **architecture migration is DONE** (Phases 1–5) and committed. The codebase is reorganized
   around a **two-thread model** (Compute vs Player) with a **5-phase state machine**. `tsc` is clean.
 - We were **mid first-launch validation** on a fresh BitNode and hit a **bootstrap RAM wall**
-  (the `coordinator` needs 15.85 GB, won't fit 8 GB home). That's the active problem to solve next.
+  (the `coordinator` needs 15.85 GB, won't fit 8 GB home). **The lean `bootstrap` entry is now
+  BUILT** (`src/bootstrap.ts`, game-validated at **4.6 GB**) — see §4. It runs: roots the network, sprays workers.
+- **NEW direction is live: the player-puppet launcher + MCP control surface (Workstream E).** Steps 1–4 and 6
+  of `docs/design/04` are DONE and **in-game validated** (2026-06-29).  Key outcomes:
+  - `bootstrap.ts` = lean permanent orchestrator (game-validated **4.8 GB**), spawns daemons via `ns.exec`
+    as home RAM allows (gradual ramp, no 32 GB cliff).  `coordinator.ts` gutted to pure batch engine (MID-
+    only).  `BOOTSTRAP_HANDOFF_RAM` retired.
+  - Read-side: `status/screen.txt` live (terminal rendered text mirrored ~1 s; `#terminal` selector
+    confirmed on v3.0.2).  Write-side: `PORT_LAUNCHER=12` → MCP inject loop proven end-to-end.
+  - Read+write loop closed: the agent perceives screen output and injects commands over MCP.
+  - Bug fixed: spreader removed from `DAEMON_CATALOG` (one-shot utility, not a persistent daemon).
+  - Step 5 built (`tsc` green): PORT_NOTIFY mirrored to `status/notifications.txt`; double-spawn guard
+    in `processLauncherCommands`; player module protocol documented.
+- **✅ RESOLVED — MCP reliability (Problems 1 & 2). The real-time WebSocket control channel is BUILT and
+  in-game validated (2026-06-29).** Build plan: `docs/plan-mcp-realtime-control.md`; **usage guide for
+  future agents: `docs/mcp-control-channel-usage.md`**; problem analysis: `docs/plan-mcp-reliability.md`.
+  - In-game daemon (`cross/game_agent.js`) opens its OWN outbound WebSocket to the bridge (`:12527`).
+    `control.cmd` round-trips at **~10 ms** (was ~400–600 ms via the file relay); `control.state` reads
+    (screen/heartbeat) at **sub-ms**. `write_port` now returns `{evicted:null}` on a clean write. RFA
+    file-relay kept as the always-available fallback.
+  - **Hard-won lesson (don't relearn it):** a WS callback must **never** call `ns.*` — it throws uncaught
+    and the engine kills the script, bypassing try/catch. Callbacks enqueue only; the main loop drains and
+    does all `ns` work. This was the startup-crash root cause. (See usage doc §"The one rule".)
+  - Problem 3 (player modules too heavy: `contract_solver` = 22 GB) is still **DEFERRED** (Phase 5) — not
+    blocking. It's now the next reliability task.
+  **Next: feature work is unblocked. Open follow-up = Problem 3 (player-module RAM lean-up).**
 - Infra (MCP bridge + statusline) broke in the Windows→Ubuntu move and is being fixed (see §6).
 
 **Read order:** this doc → `docs/design/00-architecture-philosophy.md` (the two-thread model + automation
@@ -86,7 +111,14 @@ pays only for its own `ns.*`). This is the Bitburner-idiomatic pattern and match
    orchestrator can't run beside it. **At bootstrap, run the lean orchestrator ALONE; game_agent is
    optional (only needed for MCP inspection/monitoring).**
 
-### Next task: build a lean `bootstrap` entry (BOOTSTRAP/EARLY)
+### Next task: build a lean `bootstrap` entry (BOOTSTRAP/EARLY) — ✅ DONE
+**Built:** `src/bootstrap.ts`, registered as `SCRIPT_PATHS.bootstrap = '/bootstrap.js'`. Game reports
+**4.6 GB** (fits 8 GB home alone). Self-contained — imports ONLY pure constants from `lib/config`
+(`SCRIPT_PATHS`, new `BOOTSTRAP_HANDOFF_RAM = 32`); BFS/nuke/target/deploy all inlined to bound RAM.
+Handoff threshold = `BOOTSTRAP_HANDOFF_RAM` (32 GB). **One deliberate deviation from the spec below:**
+home is NOT used as a worker host — kept clear so the ~16 GB coordinator can launch at handoff without
+killing anything. **Remaining:** run `run /bootstrap.js` in-game on the fresh node and confirm behavior.
+
 A small self-contained script (~4–5 GB; inline BFS to bound RAM — do NOT import heavy libs) that:
 1. Scans + nukes every openable server (reuse the inline nuke logic already in `compute/spreader.ts:nukeNetwork`).
 2. Picks the best target (max `moneyMax` among rooted servers with `requiredHackingSkill ≤ level`, money > 0).
@@ -102,6 +134,14 @@ the un-loadable coordinator. Register it in `lib/config.ts SCRIPT_PATHS`.
 **Bigger follow-up (Workstream D):** make `coordinator` itself lean by `ns.run`-ing its sub-daemons
 (batcher/scheduler/etc.) instead of importing them, so it fits modest RAM and can host the phase switch
 internally. Then bootstrap and coordinator converge.
+
+**Strategic direction (NEW, 2026-06-29):** the cleaner answer to *both* the bootstrap wall and the heavy
+coordinator is a single **DOM-contained player-puppet launcher** (`cross/launcher.ts`) plus an **MCP
+control surface**, governed by a new **capability boundary**: automate player *action*, not data access —
+act as a human, through human surfaces (NS/Singularity API + UI), **never inspecting or altering engine
+internals**. A ~free launcher spawns daemons as RAM allows, so the 32 GB handoff cliff becomes a gradual
+ramp, and the agent can trigger scripts/player actions over MCP for hands-free play. See `docs/design/00 §2.5`
+and the new `docs/design/04-player-automation-and-control.md`. **Docs-first: no code until 04 is ratified.**
 
 ---
 
@@ -146,6 +186,23 @@ Report when validating: RAM each script needs, red errors, home RAM + hacking le
 - **D. Quality pass** — the `TODO(design)` registry in `docs/design/03` (full bus protocol, recoveryThreadPadding,
   maxTargets auto-scale, AttackController/TargetFinder batching, bin-packing, stock↔hack coupling consume-half,
   faction/aug/program deferred items). The "make coordinator lean" refactor lives here too.
+- **E. Player-puppet launcher + MCP control** ← **ACTIVE.** Single DOM-contained `cross/launcher.ts`
+  (UI interfacing only) + MCP command channel, under the §2.5 capability boundary. See `docs/design/04`
+  (spec + live status log). **Steps 1–4 and 6 DONE, `tsc`-green, and in-game validated (2026-06-29).**
+  - Step 4: orchestrator game-validated at 4.8 GB, stable on 16 GB home; daemons idle until RAM rises
+    (gradual ramp working). Coordinator gutted to MID batch engine. Bug fixed: spreader removed from
+    DAEMON_CATALOG (one-shot utility, caused spawn-storm).
+  - Step 6: `status/screen.txt` live — `#terminal` selector confirmed on game v3.0.2; rendered terminal
+    output readable over MCP. Read+write loop closed: agent perceives screen + injects commands hands-free.
+  - Step 5: player modules as MCP-triggerable commands — **built, `tsc` green, pending
+    in-game validation.** PORT_NOTIFY mirrored to `status/notifications.txt` (every tick,
+    rolling 500). Double-spawn guard in `processLauncherCommands` (ns.isRunning check).
+    Safe-auto: contract_solver, program_acquirer, goto. Confirm-first: aug_planner --purchase.
+    Persistent: faction_manager, crime (SF4 gated; guard prevents duplicate spawn).
+  - **MCP control channel (real-time WebSocket) DONE + validated 2026-06-29** — `game_agent.js` evolved
+    into a dual control-channel + RFA-fallback daemon. Problems 1 & 2 resolved (see TL;DR). The
+    notifications/screen/heartbeat mirrors now ALSO push as live `state` frames over `:12527`.
+  **All 6 steps built and validated. Next open item: Problem 3 (player-module RAM lean-up).**
 
 Grep `TODO(design)` in `src/` for the in-code markers.
 

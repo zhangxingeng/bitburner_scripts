@@ -55,6 +55,18 @@ force-clear timeout. Files reserved for the MCP bridge + Singularity RAM-dodge o
 **user-invokable now**; computes the optimal action from stats; for judgment calls it emits a
 notification and waits. Full-auto orchestration is a later phase.
 
+### Control surface (cross-cutting) — per [00 §2.5](00-architecture-philosophy.md) + [04](04-player-automation-and-control.md)
+
+Two cross-cutting additions make the system steerable and hands-free, all under the **capability boundary**
+(act as a human, through human surfaces — never inspect/alter engine internals):
+
+- **`cross/launcher.ts`** — the *only* file permitted to touch the DOM. Drives the UI as a human would:
+  injects terminal commands to launch/kill scripts at ~0 RAM, and clicks real buttons where the API can't
+  reach (casino, pre-SF4). `ns.exec` fallback if the DOM path breaks on a game update.
+- **MCP control channel** — the agent (and user) trigger script launches and player actions over the port
+  bus + game-bridge MCP. One human input to start; everything else is auto where trusted, MCP-triggerable
+  where not. Spec: [04-player-automation-and-control.md](04-player-automation-and-control.md).
+
 ---
 
 ## 3. Foundation Libraries (build first — everything depends on these)

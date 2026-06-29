@@ -28,6 +28,8 @@ export const PORT_NOTIFY = 9;
 export const PORT_STOCK = 10;
 /** aug_planner publishes count of affordable/pending augmentations here (read by phase_detector). */
 export const PORT_AUGS  = 11;
+/** Raw terminal-command strings → game_agent pops and injects via cross/launcher. */
+export const PORT_LAUNCHER = 12;
 
 // ── Sentinel returned by readPort/peek when a port is empty ─────────────────
 const NULL_DATA = 'NULL PORT DATA';

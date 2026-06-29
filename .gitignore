@@ -3,3 +3,4 @@ dist/
 NetscriptDefinitions.d.ts
 bitburner-src
 example_code_dump
+.claude/settings.local.json

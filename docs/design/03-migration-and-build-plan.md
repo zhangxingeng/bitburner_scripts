@@ -69,6 +69,14 @@ React monitoring dashboard per [ui_plan.md](../../ui_plan.md). Replaces `cross/r
 | player/aug_planner.ts | SF11 cost-multiplier reduction; donation unlock; stat-desired filtering | alainbryden |
 | player/program_acquirer.ts | createProgram() Singularity path (make vs buy) | — |
 
+### E. Player-Puppet Launcher + MCP Control Surface (NEW — design-first)
+Per the [00 §2.5](00-architecture-philosophy.md) capability boundary + [04-player-automation-and-control.md](04-player-automation-and-control.md).
+Build a single DOM-contained `cross/launcher.ts` (**UI interfacing only**: terminal injection 3a + clicks
+3b; `ns.exec` fallback) and an MCP command channel (port bus + `game_agent`) so the agent/user can trigger
+scripts and player actions hands-free. This dissolves the bootstrap RAM wall and the heavy-coordinator
+problem — daemons spawn as their own processes as RAM allows — turning the 32 GB handoff cliff into a ramp.
+**No code until docs ratified (04 §6 build order).**
+
 ---
 
 ## Migration Safety Rules (still apply to every future wave)
