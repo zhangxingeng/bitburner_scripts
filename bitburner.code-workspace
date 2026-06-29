@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "name": "bitburner-src (game engine)",
+      "path": "../bitburner-src"
+    },
+    {
+      "name": "bitburner-scripts (my scripts)",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "terminal.integrated.cwd": "${workspaceFolder:bitburner-scripts (my scripts)}"
+  }
+}

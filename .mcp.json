@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "bitburner": {
-      "command": "pnpm",
-      "args": ["exec", "tsx", "build/game-bridge-mcp/src/index.ts"]
+      "command": "/home/shane/.nvm/versions/node/v24.18.0/bin/pnpm",
+      "args": ["exec", "tsx", "/home/shane/workspace/bitburner_scripts/build/game-bridge-mcp/src/index.ts"]
     }
   }
 }

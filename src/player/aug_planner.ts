@@ -51,7 +51,7 @@ export async function main(ns: NS): Promise<void> {
     ns.ui.openTail();
     ns.ui.setTailTitle('Aug Planner');
 
-    const flags   = ns.flags([['purchase', false]]) as { purchase: boolean };
+    const flags   = ns.flags([['purchase', false]]) as unknown as { purchase: boolean };
     const doPurchase = flags.purchase;
 
     // Guard: Singularity required (SF4).

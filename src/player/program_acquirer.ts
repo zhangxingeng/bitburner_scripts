@@ -59,7 +59,7 @@ const BACKDOOR_CYCLE_INTERVAL_MS = 60_000; // 60 s between backdoor sweeps
  * Default (no flags): buy all programs once and exit.
  */
 export async function main(ns: NS): Promise<void> {
-    const flags = ns.flags([['backdoor', false]]) as { backdoor: boolean };
+    const flags = ns.flags([['backdoor', false]]) as unknown as { backdoor: boolean };
 
     if (flags.backdoor) {
         ns.ui.openTail();
