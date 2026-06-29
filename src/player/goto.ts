@@ -3,7 +3,9 @@ import { getPaths } from '../lib/servers';
 import { traverse } from '../lib/connect';
 
 
-/** @param {NS} ns */
+/** Navigate to a server by name or regex pattern.
+ * Usage: run /player/goto.js <target>
+ */
 export async function main(ns: NS): Promise<void> {
     const target = ns.args[0] as string;
     const paths = getPaths(ns, target);
@@ -18,8 +20,5 @@ export async function main(ns: NS): Promise<void> {
         for (const path of paths.values()) {
             ns.tprint(path.join(' -> '));
         }
-        return;
     }
-
-
 }

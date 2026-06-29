@@ -1,104 +1,81 @@
-# Migration & Build Plan (Actionable)
+# Migration & Build Plan
 
-> Grounds [02-system-architecture.md](02-system-architecture.md) in our existing `src/`. Maps every
-> existing file to a target, in build order. Detail per file: `research_report/existing-src-inventory.md`.
-> **Rule: single source of truth.** When a target file is done, its sources/duplicates are deleted. No residue.
+> Grounds [02-system-architecture.md](02-system-architecture.md) in code. Big picture +
+> what's DONE (as references) + what's ACTIVE. Per-file migration history:
+> `research_report/existing-src-inventory.md`. **Rule: single source of truth — no residue.**
 
 ---
 
-## Target Folder Structure
+## Target Folder Structure (current, on disk)
 
 ```
-src/
-├── lib/        shared, imported everywhere — ports, ns_dodge, servers, format, config, script, connect, types
-├── workers/    ultra-thin HGW/prep scripts (RAM-minimal, logic-free)
-├── compute/    Thread C — coordinator, scheduler, hwgw_batcher, allocator, target_selector,
-│               spreader, pserv_manager, hacknet_manager, exec_multi, formulas
-├── player/     Thread P — faction_manager, work_manager, program_acquirer, aug_planner, crime, goto, contract_solver
-├── cross/      phase_detector, game_agent, boot_agent (→bus), reporter (monitor/UI), notification
-├── stock/      stockEngine (keep as-is, wire to phase)
-└── types/      ns-augment.d.ts
+src/lib/      foundation: ports, ns_dodge (RAM-dodge), servers, config, format, script, connect, types
+src/workers/  ultra-thin H/G/W + auto_grow, share, simple_hack_loop  (RAM-minimal, logic-free)
+src/compute/  Thread C: coordinator, hwgw_batcher, scheduler, target_selector, allocator,
+              exec_multi, formulas, ram_manager, pserv_manager, hacknet_manager, spreader
+src/player/   Thread P (user-invoked): faction_manager, program_acquirer, aug_planner,
+              crime, contract_solver, goto
+src/cross/    phase_detector, game_agent, boot_agent, reporter, notification
+src/stock/    main + config/forecast/market/stock/trader
+src/types/    ns-augment.d.ts
 ```
 
-Toolchain unchanged: `tsc -w` → `dist/` → custom WebSocket bridge (`build/game-bridge.ts`) → game;
-MCP bridge for Claude. *viteburner = optional future evaluation, not now.*
+Toolchain: `tsc -w` → `dist/` → custom WebSocket bridge (`build/game-bridge.ts`) → game; MCP
+bridge for Claude. *(viteburner = optional future evaluation.)*
+
+**Bus channels** (`lib/ports.ts`): 1 CMD, 2 RESULT, 3 HEARTBEAT, 4 DECISION, 5 BUS_REGISTER,
+6 BUS_LOCK, 7 BUS_TASK, 8 PHASE, 9 NOTIFY, 10 STOCK, 11 AUGS.
 
 ---
 
-## Migration Safety Rules (every agent obeys)
+## DONE — Phases 1–5 (migration complete, `tsc` green)
 
-1. **Foundation before modules.** No module agent starts until `src/lib/` is stable and `tsc` is green.
-2. **Move = update all importers.** Relocating a file means fixing every `import` of it repo-wide, then compiling clean.
-3. **Delete on completion.** Once a target absorbs a source, delete the source. Delete the ABANDON list.
-4. **Don't break intentional RAM-inlining.** Some tight scripts inline BFS on purpose (RAM). Keep inline where the file's RAM budget demands it; note it. Single-source-of-truth applies to *libraries*, not forced into RAM-critical workers.
-5. **Compile gate.** An agent's work isn't done until `tsc --noEmit` passes.
+- **P1 Foundation** — `lib/*` established; `ns_dodge` = RAM-dodge primitive; `servers` merges BFS+enumeration+cache; `config` holds flat phase constants + `DesignPhase` enum + `SCRIPT_PATHS`.
+- **P2a Compute engine** — `compute/*` from old `engine/`; `HackingConfig` + `batch_util` dissolved; `ram_manager` kept separate (breaks a circular dep).
+- **P2b Workers + infra** — `workers/*`; `pserv_manager` (merged purchase_server+upgrade_home), `hacknet_manager`, `spreader`; all `/tools//deploy/` paths rewired.
+- **P3 Cross-cutting** — `phase_detector` extracted from old `strategy_agent` (its remote-execution logic abandoned; phase-read folded into `coordinator`); `game_agent/boot_agent/reporter` moved; `notification` (notify-and-wait) added.
+- **P4 Stock** — existing dual-mode 4S/pre-4S engine KEPT (already matches alainbryden 75-tick model); `contracts/stock.ts`→`stock/main.ts`; phase-gated launch in coordinator; positions published to `PORT_STOCK`; API-wait-loop fix.
+- **P5 Player** — six Thread-P modules (Singularity via `ns_dodge`); `aug_planner` full impl (cascade ×1.9, topo deps, cheapest-rep-first) publishes `PORT_AUGS` → `phase_detector` RESET trigger.
 
----
-
-## PHASE 1 — Foundation (ONE agent, alone)
-
-Establishes the import surface. Build/relocate all of `src/lib/`:
-
-| Target | Source(s) | Action | Learn-from |
-|--------|-----------|--------|-----------|
-| `lib/ports.ts` | **NEW** (ports 1–4 are magic literals in 4 files today) | Build: named channel constants + peek/pop/set/clear helpers + room for bus protocol (register/lock/task-event) | inigo `libPorts.ts` (named-constant discipline); Zharay port-map schema |
-| `lib/ns_dodge.ts` | `tools/simple_through_file.ts` | Move; keep tested API | alainbryden `getNsDataThroughFile` (already equivalent) |
-| `lib/servers.ts` | merge `lib/network.ts` + `lib/server.ts` + `engine/batch_util.getAvailableServers` + `engine/ram_manager` enumeration | Consolidate BFS + botnet enumeration; add Server cache + `resetCaches()` per loop | alainbryden Server lazy-cache + resetCaches; $/s scoring model |
-| `lib/format.ts` | `lib/format.ts` (adapt); delete dup `formatRamGb` in `engine/server_manager` | Wrap `ns.formatNumber` (NOT deprecated `nFormat`); single `formatRam` | inigo `fmt` tagged-template |
-| `lib/config.ts` | `engine/config.ts` | Flatten; add **phase-boundary constants** + budgets + reserves (doc 02 §1) | alainbryden tunable thresholds centralized |
-| `lib/script.ts`, `lib/connect.ts`, `lib/types.ts` | same | Move as-is | — |
-
-Also: **delete the ABANDON list** (`engine/auto_grow.ts`, `info/servers.ts`, `info/script_ram.ts`,
-`template.ts`, `experiment.tsx`, `tools/clean.ts`). Update all importers. `tsc --noEmit` must pass.
+Closed loops live: `phase_detector → PORT_PHASE → coordinator`; `aug_planner → PORT_AUGS → phase_detector`.
 
 ---
 
-## PHASE 2 — Compute Core (fan out, disjoint file ownership)
+## ACTIVE WORKSTREAMS
 
-| Target | Source(s) | Verdict | Learn-from |
-|--------|-----------|---------|-----------|
-| `workers/{hack,grow,weaken,auto_grow,share,simple_hack_loop}.ts` | `deploy/*` | KEEP, move | Jrpl thin-worker (keep ≤ op+sleep RAM) |
-| `compute/coordinator.ts` | merge `contracts/batch_hack.ts` (entry) + `engine/ram_manager` + `engine/batch_util` leftovers | ADAPT | Zharay coordinator (self-register, locks, task-events) |
-| `compute/scheduler.ts` | `engine/thread_manager.ts` | ADAPT + bus | alainbryden `arbitraryExecution` bin-packing |
-| `compute/hwgw_batcher.ts` | `engine/batch_hack_manager.ts` (+ `engine/allocator.ts`, `compute/formulas.ts`) | ADAPT + bus | inigo `AttackController`/`TargetFinder`; alainbryden `getScheduleTiming`/`additionalMsec`/`optimizePerformanceMetrics` |
-| `compute/target_selector.ts` | `engine/server_manager.ts` | ADAPT | inigo payback-period ranking; Jrpl per-thread-efficiency (early) |
-| `compute/spreader.ts` | `tools/scan_nuke.ts` | ADAPT (clean) | Zharay `auto-spread-v2` |
-| `compute/pserv_manager.ts` | merge `tools/purchase_server.ts` + `tools/upgrade_home.ts` | ADAPT | alainbryden host-manager **time-decay budget**; inigo RAM tiers |
-| `compute/hacknet_manager.ts` | `tools/hacknet.ts` | ADAPT + phase/config | ROI loops (both repos) |
-| `compute/exec_multi.ts`, `compute/allocator.ts`, `compute/formulas.ts` | same | move/cleanup | — |
+### A. Integration & Launch  ← DOING NOW
+Make the clean architecture actually run end-to-end and validate in-game.
+- **Coordinator phase-aware strategy switch** (`compute/coordinator.ts` TODO): branch on `PORT_PHASE` — BOOTSTRAP/EARLY → thin-worker `simple_hack_loop`; MID/LATE → `hwgw_batcher`. *This is what makes the phase machine drive behavior.*
+- **Launch/run doc** — how to start from a fresh BitNode (build → bridge → game_agent → coordinator) on 8 GB home.
+- **game_agent redeploy** — live MCP relay must move `/monitor/game_agent.js` → `/cross/game_agent.js` (kill+rerun coordinator auto-launches it).
 
-RAM auto-scaling primitives to bake into coordinator/scheduler: **maxTargets auto-scale,
-recoveryThreadPadding, homeReservedRam doubling** (alainbryden).
+### B. Side-Engines (Phase 6)
+gang (`ns.formulas.gang`, Zharay) → sleeve (inigo state machine) → bladeburner (alainbryden success-threshold) → stanek. Then **reset/aug-install recommender** (notify, doc 00 §3) → eventually full-auto orchestration.
 
----
+### C. Dashboard UI
+React monitoring dashboard per [ui_plan.md](../../ui_plan.md). Replaces `cross/reporter.ts` file-dump placeholder. DOM-injection (overview hooks), live server table, notification surface (`PORT_NOTIFY`).
 
-## PHASE 3 — Cross-cutting
-
-| Target | Source(s) | Verdict | Learn-from |
-|--------|-----------|---------|-----------|
-| `cross/phase_detector.ts` | **EXTRACT** from `monitor/strategy_agent.ts` (decouple from execution) | ADAPT | our existing machine is solid; just isolate + publish to bus |
-| `cross/game_agent.ts` | `monitor/game_agent.ts` | KEEP, move (MCP relay) | — |
-| `cross/boot_agent.ts` | `monitor/boot_agent.ts` | ADAPT → named-port bus | Zharay bus |
-| `cross/reporter.ts` + dashboard | `monitor/reporter.ts` + `ui_plan.md` | ADAPT (redesign later) | ui_plan.md React injection; alainbryden DOM patterns |
-| `cross/notification.ts` | **NEW** | Build | notify-and-wait (doc 00 §3) |
-
-## PHASE 4 — Stock Engine
-`stock/*` mostly KEEP; `contracts/stock.ts`→`stock/main.ts`; wire to phase system.
-Learn-from: alainbryden pre-4S cycle model; Zharay 4S `profitPotential` + **stock↔hack market-manipulation coupling**.
-
-## PHASE 5 — Thread-P Modules (user-invoked; Singularity + lib/ns_dodge)
-
-| Target | Source(s) | Learn-from |
-|--------|-----------|-----------|
-| `player/faction_manager.ts` (+ work) | `contracts/faction.ts` | alainbryden work-for-factions priority + scope expansion |
-| `player/program_acquirer.ts` | merge `tools/port_openers.ts` + `contracts/backdoor.ts` | — |
-| `player/aug_planner.ts` | `info/augmentations.ts` (seed) | alainbryden faction-manager cascading-cost + cheapest-rep-first + dependency ordering |
-| `player/crime.ts` | `contracts/crime.ts` (swap to `lib/ns_dodge`) | — |
-| `player/contract_solver.ts`, `player/goto.ts` | `deploy/contracts.ts`, `contracts/goto.ts` | move |
-
-## PHASE 6 — Side-Engines (later)
-gang → sleeve → bladeburner → stanek. Then RESET recommender (notify), then full-auto orchestration.
+### D. Quality Pass — deferred `TODO(design)` registry (single source of truth)
+| File | Deferred item | Learn-from |
+|------|--------------|-----------|
+| compute/coordinator.ts | full bus: PORT_BUS_REGISTER self-register + PORT_BUS_TASK events; homeReservedRam doubling; consume PORT_STOCK → bias grow-long/hack-short | Zharay bus + coupling; alainbryden |
+| compute/hwgw_batcher.ts | AttackController/TargetFinder objects; getScheduleTiming/additionalMsec/optimizePerformanceMetrics; recoveryThreadPadding; maxTargets auto-scale | inigo + alainbryden |
+| compute/scheduler.ts | bus task-event accounting; arbitraryExecution bin-packing | alainbryden |
+| compute/target_selector.ts | per-thread-efficiency (EARLY) / payback-period (LATE) ranking | inigo/Jrpl |
+| compute/hacknet_manager.ts | hash-spend logic | alainbryden |
+| cross/reporter.ts | → see workstream C | ui_plan.md |
+| stock/main.ts | track purchase-time profitPotential → profitChange (sell signal) | Zharay |
+| player/faction_manager.ts | company-work restore; idle karma-grind fallback; full 9-scope strategy | alainbryden |
+| player/aug_planner.ts | SF11 cost-multiplier reduction; donation unlock; stat-desired filtering | alainbryden |
+| player/program_acquirer.ts | createProgram() Singularity path (make vs buy) | — |
 
 ---
 
-*Status: actionable plan ready. Execution begins Phase 1 (foundation), then fan-out per phase.*
+## Migration Safety Rules (still apply to every future wave)
+1. Foundation/shared before dependents. 2. Move = update all importers + compile. 3. Delete on
+completion (no residue). 4. Keep intentional RAM-inlining in tight workers. 5. Compile gate:
+`npx tsc --noEmit` must be 0. 6. One config-writer per parallel wave (avoid `lib/config` races).
+
+---
+
+*Status: migration done; workstream A (integration & launch) active.*

@@ -1,5 +1,27 @@
 import { NS } from '@ns';
 
+// ── Phase state machine enum (docs/design/02-system-architecture.md §1) ──────
+//
+// Published by cross/phase_detector.ts on PORT_PHASE.
+// Read by compute/coordinator.ts and any module that adapts by phase.
+//
+// Mapping from legacy strategy_agent phases → design phases:
+//   BOOTSTRAP   → BOOTSTRAP  (homeMaxRam ≤ PHASE_RAM_EARLY = 16 GB, fresh start)
+//   SNOWBALL    → EARLY      (building port openers, nuking servers, ramping RAM)
+//   EXPANSION   → EARLY      (more servers to nuke; still pre-MID)
+//   PREPARATION → MID        (targets need prep before HWGW; coordinator handles)
+//   BATCH       → MID        (HWGW batching active; coordinator handles)
+//   (new)       → LATE       (homeMaxRam ≥ 512 GB; side-engines viable)
+//   (new)       → RESET      (enough pending augs; notify-and-wait for human decision)
+//
+export enum DesignPhase {
+    BOOTSTRAP = 'BOOTSTRAP',
+    EARLY     = 'EARLY',
+    MID       = 'MID',
+    LATE      = 'LATE',
+    RESET     = 'RESET',
+}
+
 // ── Phase boundary constants ──────────────────────────────────────────────────
 // Tunable thresholds for the phase state machine (see docs/design/02-system-architecture.md §1).
 // All numeric values are in GB (RAM) or raw counts unless noted.
@@ -59,6 +81,20 @@ export const SCRIPT_PATHS = {
     pservManager:   '/compute/pserv_manager.js',
     hacknetManager: '/compute/hacknet_manager.js',
     spreader:       '/compute/spreader.js',
+    // cross/ — phase detection, MCP relay, boot relay, status reporter (Phase 3)
+    phaseDetector:  '/cross/phase_detector.js',
+    gameAgent:      '/cross/game_agent.js',
+    bootAgent:      '/cross/boot_agent.js',
+    reporter:       '/cross/reporter.js',
+    // stock/ — income engine (Phase 4); phase-gated EARLY+
+    stockEngine:    '/stock/main.js',
+    // player/ — Thread-P user-invoked modules (Phase 5); NOT auto-launched by coordinator
+    factionManager:  '/player/faction_manager.js',
+    programAcquirer: '/player/program_acquirer.js',
+    augPlanner:      '/player/aug_planner.js',
+    crime:           '/player/crime.js',
+    contractSolver:  '/player/contract_solver.js',
+    goto:            '/player/goto.js',
 } as const;
 
 /** Base RAM cost per worker script thread (GB). */

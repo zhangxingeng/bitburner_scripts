@@ -131,4 +131,16 @@ export class Stock {
     blackoutWindow(): number {
         return Math.ceil(this.timeToCoverTheSpread());
     }
+
+    /**
+     * Zharay profitPotential signal: volatility * (forecast - 0.5).
+     * Positive = bullish (long), negative = bearish (short).
+     * Used by the stock↔hack coupling: coordinator reads PORT_STOCK and biases
+     * grow toward long positions, hack toward short positions.
+     * NOTE: Unlike expectedReturn(), this is unadjusted (no probStdDev conservatism)
+     * so the coupling signal stays sharp.
+     */
+    profitPotential(): number {
+        return this.volatility * (this.forecast - 0.5);
+    }
 } 

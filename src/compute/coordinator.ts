@@ -2,6 +2,7 @@ import type { NS } from '@ns';
 import { formatMoney, formatRam } from '../lib/format';
 import { getAvailableServers } from '../lib/servers';
 import {
+    DesignPhase,
     SCRIPT_PATHS,
     SCRIPT_RAM_COST,
     MIN_SERVER_RAM,
@@ -18,6 +19,7 @@ import {
     INTERVAL_PORT_OPENER_S,
     INTERVAL_SHARE_S,
 } from '../lib/config';
+import { PORT_PHASE, PORT_DECISION, PORT_STOCK, peekPort, pushPort } from '../lib/ports';
 import { RamManager } from './ram_manager';
 import { TargetSelector, isServerPrepared, getTargetServers } from './target_selector';
 import { BatchHackManager } from './hwgw_batcher';
@@ -32,9 +34,11 @@ const DAEMON_PATHS = {
     pservManager:   '/compute/pserv_manager.js',   // buy/upgrade pservs + home RAM
     hacknetManager: '/compute/hacknet_manager.js',  // ROI-based hacknet upgrades
     spreader:       '/compute/spreader.js',         // BFS root + propagate
-    buyPortOpener:  '/tools/port_openers.js',       // Phase 5 — not yet moved
-    gameAgent:      '/monitor/game_agent.js',       // MCP file-based command relay
-    bootAgent:      '/monitor/boot_agent.js',       // Port-based IPC relay
+    buyPortOpener:  '/player/program_acquirer.js',   // moved from /tools/port_openers.js (Phase 5)
+    phaseDetector:  '/cross/phase_detector.js',     // publishes DesignPhase to PORT_PHASE
+    gameAgent:      '/cross/game_agent.js',         // MCP file-based command relay
+    bootAgent:      '/cross/boot_agent.js',         // Port-based IPC relay
+    stockEngine:    '/stock/main.js',               // Phase 4 — income EARLY+; publishes PORT_STOCK
 } as const;
 
 const FEATURES = {
@@ -190,8 +194,11 @@ function shareRemainingRam(
 
 // ── Main daemon entry point ───────────────────────────────────────────────────
 
-// TODO(design): Publish phase/target decisions to PORT_PHASE / PORT_BUS_TASK so cross/
-//               modules can react without polling. Add self-registration on PORT_BUS_REGISTER.
+// TODO(design): Wire phase-aware compute strategy — skip HWGW batcher in BOOTSTRAP/EARLY,
+//               launch simple_hack_loop on best target instead.  PORT_PHASE is now wired;
+//               the strategy branch is the next step.
+// TODO(design): Publish task START/DONE events to PORT_BUS_TASK for zero-poll RAM accounting.
+//               Add self-registration on PORT_BUS_REGISTER.
 // TODO(design): homeReservedRam doubling — when violation is frequent, double the minimum
 //               reserve (alainbryden pattern) to shed load gracefully.
 
@@ -199,12 +206,12 @@ export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
     ns.enableLog('print');
 
-    // Optional --homeRam override: strategy_agent (or user) can pass a higher reservation
+    // Optional --homeRam override: user or phase_detector can pass a higher reservation
     const args = ns.flags([['homeRam', 0]]);
     const homeRamOverride = Number(args.homeRam);
 
     // Wire up engine components
-    const ramManager  = new RamManager(ns, homeRamOverride > 0 ? homeRamOverride : undefined);
+    const ramManager    = new RamManager(ns, homeRamOverride > 0 ? homeRamOverride : undefined);
     const targetManager = new TargetSelector(ns);
 
     const scripts = {
@@ -223,20 +230,23 @@ export async function main(ns: NS): Promise<void> {
     const batchManager = new BatchHackManager(ns, threadManager);
 
     // Initial nuke pass + launch persistent daemons
+    // stockEngine is NOT launched here: it requires phase >= EARLY (read in loop).
     await nukeAll(ns);
-    if (!ns.isRunning(DAEMON_PATHS.gameAgent, 'home'))      ns.exec(DAEMON_PATHS.gameAgent, 'home', 1);
-    if (!ns.isRunning(DAEMON_PATHS.bootAgent, 'home'))       ns.exec(DAEMON_PATHS.bootAgent, 'home', 1);
+    if (!ns.isRunning(DAEMON_PATHS.phaseDetector, 'home')) ns.exec(DAEMON_PATHS.phaseDetector, 'home', 1);
+    if (!ns.isRunning(DAEMON_PATHS.gameAgent,     'home')) ns.exec(DAEMON_PATHS.gameAgent,     'home', 1);
+    if (!ns.isRunning(DAEMON_PATHS.bootAgent,     'home')) ns.exec(DAEMON_PATHS.bootAgent,     'home', 1);
     if (FEATURES.enableAutoServerPurchase &&
-        !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))    ns.exec(DAEMON_PATHS.pservManager, 'home', 1);
+        !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))  ns.exec(DAEMON_PATHS.pservManager,  'home', 1);
     if (!ns.isRunning(DAEMON_PATHS.hacknetManager, 'home')) ns.exec(DAEMON_PATHS.hacknetManager, 'home', 1);
 
     ns.print('Coordinator started');
 
     let tick = 0;
-    let lastNukeTime = 0;
-    let lastPortOpenerTime = 0;
-    let lastShareTime = 0;
-    let lastTargetCheck = 0;
+    let lastNukeTime        = 0;
+    let lastPortOpenerTime  = 0;
+    let lastShareTime       = 0;
+    let lastTargetCheck     = 0;
+    let lastPhase: DesignPhase | null = null;
     const TARGET_CHECK_INTERVAL_S = 5;
 
     while (true) {
@@ -244,6 +254,27 @@ export async function main(ns: NS): Promise<void> {
             tick++;
             const now = Date.now();
             const sec = Math.floor(now / 1000);
+
+            // ── Phase awareness (resolves TODO(design) from Phase 2a) ─────────
+            // phase_detector publishes the current DesignPhase string to PORT_PHASE.
+            // Coordinator reads it each tick and logs transitions to PORT_DECISION.
+            // TODO(design): branch on phase to switch compute strategy (BOOTSTRAP/EARLY
+            //               → simple_hack_loop; MID/LATE → HWGW batcher).
+            const phaseStr    = peekPort(ns, PORT_PHASE) as DesignPhase | null;
+            const currentPhase: DesignPhase = phaseStr ?? DesignPhase.BOOTSTRAP;
+            if (currentPhase !== lastPhase) {
+                ns.print(`Coordinator: phase = ${currentPhase}${lastPhase ? ` (was ${lastPhase})` : ''}`);
+                pushPort(ns, PORT_DECISION, JSON.stringify({
+                    ts:   now,
+                    tick,
+                    type: 'COORDINATOR_PHASE_ACK',
+                    phase: currentPhase,
+                }));
+                lastPhase = currentPhase;
+            }
+
+            // Ensure phaseDetector is still alive (respawn if killed)
+            if (!ns.isRunning(DAEMON_PATHS.phaseDetector, 'home')) ns.exec(DAEMON_PATHS.phaseDetector, 'home', 1);
 
             // ── Periodic maintenance ──────────────────────────────────────────
             if (sec - lastNukeTime >= INTERVAL_NUKE_S) {
@@ -255,9 +286,25 @@ export async function main(ns: NS): Promise<void> {
                 lastPortOpenerTime = sec;
             }
             // Ensure persistent infrastructure daemons are alive (respawn if killed)
+            if (!ns.isRunning(DAEMON_PATHS.gameAgent,      'home')) ns.exec(DAEMON_PATHS.gameAgent,      'home', 1);
+            if (!ns.isRunning(DAEMON_PATHS.bootAgent,      'home')) ns.exec(DAEMON_PATHS.bootAgent,      'home', 1);
             if (FEATURES.enableAutoServerPurchase &&
-                !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))   ns.exec(DAEMON_PATHS.pservManager, 'home', 1);
-            if (!ns.isRunning(DAEMON_PATHS.hacknetManager, 'home')) ns.exec(DAEMON_PATHS.hacknetManager, 'home', 1);
+                !ns.isRunning(DAEMON_PATHS.pservManager, 'home'))   ns.exec(DAEMON_PATHS.pservManager,   'home', 1);
+            if (!ns.isRunning(DAEMON_PATHS.hacknetManager, 'home')) ns.exec(DAEMON_PATHS.hacknetManager,  'home', 1);
+
+            // ── Stock engine (Phase 4) — phase-gated EARLY+ ──────────────────
+            // stock/main.ts handles its own API-purchase wait loop, so we just
+            // ensure it's alive once we leave BOOTSTRAP.  It publishes positions
+            // to PORT_STOCK each cycle (stock↔hack coupling, publish half done).
+            // TODO(design): read PORT_STOCK here and set isLong/isShort flags on
+            //   hack targets so the batcher biases grow→longs and hack→shorts
+            //   (Zharay market-manipulation coupling, zharay.md §"Coordinator integration").
+            //   PORT_STOCK carries [{sym, long, short, profitPotential, profitChange}].
+            //   Do NOT build the biasing now — it touches the settled batcher (Phase 5+).
+            if (currentPhase !== DesignPhase.BOOTSTRAP &&
+                !ns.isRunning(DAEMON_PATHS.stockEngine, 'home')) {
+                ns.exec(DAEMON_PATHS.stockEngine, 'home', 1);
+            }
 
             // ── RAM snapshot ─────────────────────────────────────────────────
             const homeReserved = calcHomeRamReservation(ns, homeRamOverride > 0 ? homeRamOverride : undefined);

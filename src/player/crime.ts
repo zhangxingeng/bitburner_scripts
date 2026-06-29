@@ -24,8 +24,8 @@ const AVAILABLE_CRIMES = [
     CrimeType.heist
 ];
 
-/** 
- * Main script function 
+/**
+ * Main script function
  * @param {NS} ns - Netscript API
  */
 export async function main(ns: NS): Promise<void> {
@@ -70,41 +70,28 @@ export async function main(ns: NS): Promise<void> {
             // Train for first crime if nothing else is appropriate
             await trainForCrime(ns, crimeLadder[0]);
         }
-
-        // No need for additional sleep here since functions already wait for actions to complete
-        // Remove the brief pause between actions
     }
 }
 
 /**
  * Builds a crime ladder sorted by success chance (ascending)
  * This creates a dynamic ladder from easiest to hardest crimes
- * @param {NS} ns - Netscript API
- * @returns {CrimeType[]} - Sorted crime ladder
  */
 async function buildCrimeLadder(ns: NS): Promise<CrimeType[]> {
     const crimeChances: Array<{ crime: CrimeType, chance: number, profit: number }> = [];
 
-    // Calculate success chance and expected profit for each crime
     for (const crime of AVAILABLE_CRIMES) {
         const chance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
         const stats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
-        // Expected profit per second = (money * chance) / (time / 1000)
         const profit = (stats.money * chance) / (stats.time / 1000);
         crimeChances.push({ crime, chance, profit });
     }
 
-    // First sort by success chance (ascending - easiest to hardest)
     crimeChances.sort((a, b) => b.chance - a.chance);
-
-    // Get the crime types in order
     return crimeChances.map(c => c.crime);
 }
 
-/**
- * Initial pure training phase to reach minimum stats
- * @param {NS} ns - Netscript API
- */
+/** Initial pure training phase to reach minimum stats */
 async function pureTrainingPhase(ns: NS): Promise<void> {
     ns.print('Starting pure training phase');
     let allStatsAboveThreshold = false;
@@ -112,26 +99,18 @@ async function pureTrainingPhase(ns: NS): Promise<void> {
     while (!allStatsAboveThreshold) {
         const player = ns.getPlayer();
         const lowestStat = findLowestStat(player);
-
         ns.print(`Training ${lowestStat.name} (${lowestStat.value}) to reach minimum threshold of ${MIN_STAT_THRESHOLD}`);
 
-        // Train the lowest stat for multiple cycles
         for (let i = 0; i < TRAINING_MULTIPLIER; i++) {
             await trainStat(ns, lowestStat.name);
         }
 
-        // Check if all stats are above threshold
         allStatsAboveThreshold = checkAllStatsAboveThreshold(ns.getPlayer());
     }
 
     ns.print('Pure training phase complete - all stats above threshold');
 }
 
-/**
- * Checks if all stats are above the minimum threshold
- * @param {Player} player - Player object
- * @returns {boolean} - True if all stats are above threshold
- */
 function checkAllStatsAboveThreshold(player: Player): boolean {
     return (
         player.skills.strength >= MIN_STAT_THRESHOLD &&
@@ -143,11 +122,6 @@ function checkAllStatsAboveThreshold(player: Player): boolean {
     );
 }
 
-/**
- * Find the lowest stat that needs training
- * @param {Player} player - Player object
- * @returns {Object} - Object containing name and value of lowest stat
- */
 function findLowestStat(player: Player): { name: string, value: number } {
     const stats = [
         { name: 'strength', value: player.skills.strength },
@@ -157,199 +131,90 @@ function findLowestStat(player: Player): { name: string, value: number } {
         { name: 'hacking', value: player.skills.hacking },
         { name: 'charisma', value: player.skills.charisma }
     ];
-
-    // Sort stats by value and return the lowest
     stats.sort((a, b) => a.value - b.value);
     return stats[0];
 }
 
-/**
- * Trains a specific stat
- * @param {NS} ns - Netscript API
- * @param {string} stat - Stat name to train
- */
 async function trainStat(ns: NS, stat: string): Promise<void> {
-    // Ensure player is healthy
     if (ns.getPlayer().hp.current < ns.getPlayer().hp.max) {
         await executeCommand(ns, 'ns.singularity.hospitalize()');
     }
 
-    // Stop any current action before starting a new one
     await executeCommand(ns, 'ns.singularity.stopAction()');
 
-    // Define a reasonable action time based on the type of stat we're training
     let actionTime = 0;
 
     if (stat === 'hacking' || stat === 'charisma') {
-        // Train hacking at university'
         const course = stat === 'hacking' ? UniversityClassType.algorithms : UniversityClassType.leadership;
         await executeCommand(ns, `ns.singularity.universityCourse('Rothman University', "${course}", false)`);
-        // Use a basic crime for reference duration (like shoplift or mug)
-        const crimeForDuration = CrimeType.shoplift;
-        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crimeForDuration}")`);
-
-        // Add null check before accessing the time property
-        if (!crimeStats) {
-            ns.print(`ERROR: Could not get crime stats for ${crimeForDuration}`);
-            // Use a default value or return early
-            actionTime = 10000; // Default to 10 seconds if we can't get the real time
-        } else {
-            actionTime = crimeStats.time;
-        }
+        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${CrimeType.shoplift}")`);
+        actionTime = crimeStats?.time ?? 10000;
     } else {
-        // Train physical stat at gym
-        const gymStat = stat as keyof typeof GymType;
-        const gymStatType = GymType[gymStat];
+        const gymStatType = GymType[stat as keyof typeof GymType];
         await executeCommand(ns, `ns.singularity.gymWorkout('Powerhouse Gym', "${gymStatType}", false)`);
-        // Use a basic crime for reference duration
-        const crimeForDuration = CrimeType.mug;
-        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crimeForDuration}")`);
-
-        // Add null check before accessing the time property
-        if (!crimeStats) {
-            ns.print(`ERROR: Could not get crime stats for ${crimeForDuration}`);
-            // Use a default value or return early
-            actionTime = 10000; // Default to 10 seconds if we can't get the real time
-        } else {
-            actionTime = crimeStats.time;
-        }
+        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${CrimeType.mug}")`);
+        actionTime = crimeStats?.time ?? 10000;
     }
 
-    // Wait for action to complete, but don't stop action - let the next function do it
     ns.print(`Training ${stat} for ${actionTime / 1000} seconds`);
     await ns.sleep(actionTime);
-    // Remove stopAction here - it will be called at the beginning of the next action
 }
 
-/**
- * Finds the current position on the crime ladder (highest crime with COMMIT_THRESHOLD)
- * @param {NS} ns - Netscript API
- * @param {CrimeType[]} crimeLadder - Current crime ladder
- * @returns {number} - Index of current crime in crimeLadder, or -1 if none meet threshold
- */
 async function findCurrentCrimeIndex(ns: NS, crimeLadder: CrimeType[]): Promise<number> {
-    // Start from the end (hardest crime) and work backwards
     for (let i = crimeLadder.length - 1; i >= 0; i--) {
         const crimeChance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crimeLadder[i]}")`);
-        if (crimeChance >= COMMIT_THRESHOLD) {
-            return i;
-        }
+        if (crimeChance >= COMMIT_THRESHOLD) return i;
     }
-    return -1; // No crime meets the minimum success rate
+    return -1;
 }
 
-/**
- * Commits a crime and waits for it to complete
- * @param {NS} ns - Netscript API
- * @param {CrimeType} crime - Crime to commit
- */
 async function myCommitCrime(ns: NS, crime: CrimeType): Promise<void> {
-    // Ensure player is healthy
     if (ns.getPlayer().hp.current < ns.getPlayer().hp.max) {
         await executeCommand(ns, 'ns.singularity.hospitalize()');
     }
 
-    // Stop any current action before starting a new one
     await executeCommand(ns, 'ns.singularity.stopAction()');
 
-    // Get crime stats for duration
     const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
     const successRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
 
-    // Display expected profit
     const expectedProfit = (crimeStats.money * successRate) / (crimeStats.time / 1000);
     ns.print(`Committing crime: ${crime} (${formatPercent(successRate)} success rate, $${shortNumber(expectedProfit)}/sec)`);
 
-    // Commit the crime
     await executeCommand(ns, `ns.singularity.commitCrime("${crime}", false)`);
-
-    // Wait for crime to complete, but don't stop action - let the next function do it
     await ns.sleep(crimeStats.time);
 
-    // Remove stopAction here - it will be called at the beginning of the next action
-
-    // Display result
     displayStatus(ns, ns.getPlayer());
 }
 
-/**
- * Trains stats optimized for a specific crime
- * @param {NS} ns - Netscript API
- * @param {CrimeType} targetCrime - Crime to train for
- */
 async function trainForCrime(ns: NS, targetCrime: CrimeType): Promise<void> {
-    // Get stats for target crime
     const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${targetCrime}")`);
-
-    // Get current player stats
     const player = ns.getPlayer();
-
-    // Calculate weighted importance of each stat for the crime
     const statImportance = calculateStatImportance(crimeStats, player);
-
-    // Find the most important stat to train
     const statToTrain = statImportance[0].name;
     const crimeChance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${targetCrime}")`);
     ns.print(`Training ${statToTrain} for crime: ${targetCrime} (Current success: ${formatPercent(crimeChance)})`);
 
-    // Train the selected stat for multiple cycles
     for (let i = 0; i < TRAINING_MULTIPLIER; i++) {
         await trainStat(ns, statToTrain);
     }
 }
 
-/**
- * Calculates the importance of each stat for a crime based on
- * both the crime requirements and the player's current stats
- * @param {CrimeStats} crimeStats - Stats for the target crime
- * @param {Player} player - Player object
- * @returns {Array} - Array of stats sorted by importance
- */
 function calculateStatImportance(crimeStats: CrimeStats, player: Player): Array<{ name: string, importance: number }> {
-    // Calculate importance for each stat
     const importance = [
-        {
-            name: 'hacking',
-            importance: crimeStats.hacking_success_weight / Math.max(1, player.skills.hacking)
-        },
-        {
-            name: 'strength',
-            importance: crimeStats.strength_success_weight / Math.max(1, player.skills.strength)
-        },
-        {
-            name: 'defense',
-            importance: crimeStats.defense_success_weight / Math.max(1, player.skills.defense)
-        },
-        {
-            name: 'dexterity',
-            importance: crimeStats.dexterity_success_weight / Math.max(1, player.skills.dexterity)
-        },
-        {
-            name: 'agility',
-            importance: crimeStats.agility_success_weight / Math.max(1, player.skills.agility)
-        },
-        {
-            name: 'charisma',
-            importance: crimeStats.charisma_success_weight / Math.max(1, player.skills.charisma)
-        }
+        { name: 'hacking',   importance: crimeStats.hacking_success_weight   / Math.max(1, player.skills.hacking) },
+        { name: 'strength',  importance: crimeStats.strength_success_weight   / Math.max(1, player.skills.strength) },
+        { name: 'defense',   importance: crimeStats.defense_success_weight    / Math.max(1, player.skills.defense) },
+        { name: 'dexterity', importance: crimeStats.dexterity_success_weight  / Math.max(1, player.skills.dexterity) },
+        { name: 'agility',   importance: crimeStats.agility_success_weight    / Math.max(1, player.skills.agility) },
+        { name: 'charisma',  importance: crimeStats.charisma_success_weight   / Math.max(1, player.skills.charisma) },
     ];
-
-    // Filter stats with positive weight and sort by importance (highest first)
-    return importance
-        .filter(stat => stat.importance > 0)
-        .sort((a, b) => b.importance - a.importance);
+    return importance.filter(s => s.importance > 0).sort((a, b) => b.importance - a.importance);
 }
 
-/**
- * Displays current status information
- * @param {NS} ns - Netscript API
- * @param {Player} player - Player object
- */
 async function displayStatus(ns: NS, player: Player): Promise<void> {
     const stats = player.skills;
     const karma = ns.heart.break();
-
-    // Get current crime ladder
     const crimeLadder = await buildCrimeLadder(ns);
 
     ns.print('--------------------------------------');
@@ -365,18 +230,13 @@ async function displayStatus(ns: NS, player: Player): Promise<void> {
     ns.print(`Charisma: ${stats.charisma}`);
     ns.print(`Intelligence: ${stats.intelligence || 0}`);
     ns.print('--------------------------------------');
-
-    // Show success rates for crimes in ladder
     ns.print('CRIME LADDER (by success rate):');
+
     for (const crime of crimeLadder) {
         const successRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
         const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
         const expectedProfit = (crimeStats.money * successRate) / (crimeStats.time / 1000);
-
-        let indicator = '❌';
-        if (successRate >= COMMIT_THRESHOLD) indicator = '✅';
-        else if (successRate >= TRAINING_THRESHOLD) indicator = '🔶';
-
+        const indicator = successRate >= COMMIT_THRESHOLD ? '[OK]' : successRate >= TRAINING_THRESHOLD ? '[TR]' : '[  ]';
         ns.print(`${indicator} ${crime}: ${formatPercent(successRate)} - $${shortNumber(expectedProfit)}/sec`);
     }
 }

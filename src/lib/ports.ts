@@ -24,6 +24,10 @@ export const PORT_BUS_TASK = 7;
 export const PORT_PHASE = 8;
 /** Bus: notification channel (user-facing alerts). */
 export const PORT_NOTIFY = 9;
+/** Stock engine publishes current positions here each cycle for coordinator coupling. */
+export const PORT_STOCK = 10;
+/** aug_planner publishes count of affordable/pending augmentations here (read by phase_detector). */
+export const PORT_AUGS  = 11;
 
 // ── Sentinel returned by readPort/peek when a port is empty ─────────────────
 const NULL_DATA = 'NULL PORT DATA';

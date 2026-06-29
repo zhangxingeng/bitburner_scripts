@@ -596,6 +596,14 @@ export class StockMarket {
     }
 
     /**
+     * Get the list of currently owned stocks.
+     * Used by stock/main.ts to publish positions to PORT_STOCK each cycle.
+     */
+    getOwnedStocks(): Stock[] {
+        return this.myStocks.slice();
+    }
+
+    /**
      * Format basis points for display
      * @param fraction Fraction to format
      * @returns Formatted string
