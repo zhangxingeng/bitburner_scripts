@@ -1,6 +1,6 @@
 # Design 11 — Subsystem Autonomy + Console v2 (wide build, all three themes)
 
-**Status:** PLAN (awaiting ratification 2026-06-30). Doc-first so it survives compaction. Built as ONE wave-based parallel round per [[10-parallel-build-playbook]] (now with `worktree.baseRef: head` set, so the unpushed Wave-0 seam reaches the agents).
+**Status:** ✅ BUILT 2026-06-30 — seam `08d1fd5`/`2a56526`, dev-cheat `d8bf1fc`, Wave-1 `3f86ec0`; pushed. `tsc --noEmit` + `node --check` clean, tests green. Tier-2 (user, dev-cheat-assisted) is the remaining gate. Built as ONE wave-based parallel round per [[10-parallel-build-playbook]] with `worktree.baseRef: head` — **the console-v1 stale-base bug did NOT recur** (all 10 agents branched from the seam HEAD). One integration fix needed (bladeburner branded enum types — playbook §4 "verify in main tree").
 
 **User direction (2026-06-30):** the next round covers **all three themes at once** — they're separate things, plan them well, fan out Sonnet agents concurrently like console v1.
 
