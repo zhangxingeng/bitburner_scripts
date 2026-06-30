@@ -96,7 +96,7 @@ export const SCRIPT_PATHS = {
     reporter:       '/cross/reporter.js',
     launcher:        '/cross/launcher.js',
     playerSequencer: '/cross/player_sequencer.js',
-    configDashboard: '/ui/config_dashboard.js',
+    controlConsole: '/ui/control_console.js',
     // stock/ — income engine (Phase 4); phase-gated EARLY+
     stockEngine:    '/stock/main.js',
     // player/ — Thread-P user-invoked modules (Phase 5); NOT auto-launched by coordinator
@@ -152,7 +152,7 @@ export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase 
     { key: 'gameAgent',      path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY     },
     { key: 'stockEngine',     path: SCRIPT_PATHS.stockEngine,      minPhase: DesignPhase.EARLY },
     { key: 'playerSequencer', path: SCRIPT_PATHS.playerSequencer, minPhase: DesignPhase.EARLY },
-    { key: 'configDashboard', path: SCRIPT_PATHS.configDashboard, minPhase: DesignPhase.EARLY },
+    { key: 'controlConsole', path: SCRIPT_PATHS.controlConsole, minPhase: DesignPhase.EARLY },
     // ── MID — heavy batch engine (~15.85 GB import footprint); fits at ≥ 64 GB ─
     { key: 'coordinator',    path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID       },
 ];

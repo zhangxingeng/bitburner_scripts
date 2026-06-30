@@ -1,28 +1,35 @@
 import type { NS } from '@ns';
 import { React, ReactDOM, domWindow, domDocument } from '../lib/react';
-import { BrainSettings, loadSettings, saveSettings } from '../lib/settings';
+import { loadSettings, saveSettings, BrainSettings } from '../lib/settings';
 import { SCRIPT_PATHS } from '../lib/config';
 import { PORT_AUGS, peekPort } from '../lib/ports';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
+import type { ConsoleState, Intent, Dispatch, Panel } from './console_types';
+import { configPanel } from './panels/config_panel';
 
 /**
- * Config Dashboard — the human steering panel for the Thread-P brain.
+ * Central Control Console — the brain's in-game UI surface.
+ * (docs/design/08-control-console.md; grew out of milestone-2's config_dashboard.)
  *
- * Minimal-footprint UI (docs/design/05-thread-p-sequencing.md §8): injects a
- * single ⚙ gear button into the game toolbar (next to Save / Kill / Remote API);
- * clicking it toggles a self-owned floating panel mounted on document.body, fully
- * under our control, that renders BrainSettings as live toggles plus two action
- * buttons. We never colonise the game's own layout beyond that one gear.
+ * Minimal-footprint shell (design/06 §4, /05 §8): injects a single robot button
+ * into the game toolbar (next to Save / Kill / Remote API); clicking it toggles a
+ * self-owned draggable window mounted on document.body, fully under our control.
+ * The window is a panel REGISTRY — it renders each registered `Panel`'s
+ * render(state, dispatch). Adding a feature = add a panel to PANELS; the shell
+ * never changes.
  *
- * NS-safety contract (§3): no ns.* call ever runs inside the React tree. Toggle
- * and button handlers only mutate plain module-level mailboxes; the NS main loop
- * drains them each tick and performs all ns.* work (saveSettings, ns.run,
- * Singularity install via ns_dodge). Fresh state flows back to the panel over a
- * per-PID DOM CustomEvent.
+ * NS-safety contract (§3): no ns.* call ever runs inside the React tree. Panels
+ * push Intents into a module-level outbound queue; the NS main loop drains it
+ * each tick and performs all ns.* work (saveSettings, ns.run, Singularity install
+ * via ns_dodge). Fresh ConsoleState flows back to the window over a per-PID DOM
+ * CustomEvent.
  *
- * Mount:  ns.run('/ui/config_dashboard.js', 'home', 1)
+ * Mount:  ns.run('/ui/control_console.js', 'home', 1)
  */
+
+// ── Registered panels (design/08 §4 — append here to add a feature) ───────────
+const PANELS: Panel[] = [configPanel];
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -51,79 +58,15 @@ const CONSOLE_ICON_COLOR = '#00cc00';
  */
 const KILL_ANCHOR = '[aria-label="kill all scripts"]';
 
-type ToggleKey =
-	| 'autoJoinFactions'
-	| 'autoBuyPrograms'
-	| 'autoSolveContracts'
-	| 'autoBuyAugs'
-	| 'autoReset'
-	| 'autoBitNode';
+// ── Loop ↔ React bridge (plain values — never touched by ns.* in React) ───────
 
-const TOGGLES: { key: ToggleKey; label: string }[] = [
-	{ key: 'autoJoinFactions',   label: 'Auto-join factions' },
-	{ key: 'autoBuyPrograms',    label: 'Auto-buy programs' },
-	{ key: 'autoSolveContracts', label: 'Auto-solve contracts' },
-	{ key: 'autoBuyAugs',        label: 'Auto-buy augs' },
-	{ key: 'autoReset',          label: 'Auto-reset' },
-	{ key: 'autoBitNode',        label: 'Auto-BitNode' },
-];
+/** Set by panel dispatch(); drained + executed by the NS loop each tick. */
+let outboundIntents: Intent[] = [];
+const dispatch: Dispatch = (intent) => { outboundIntents.push(intent); };
 
-// ── Loop ↔ React mailboxes (plain values — never touched by ns.* in React) ────
+// ── Shell ─────────────────────────────────────────────────────────────────────
 
-interface PanelState {
-	settings: BrainSettings;
-	pendingAugs: number;
-}
-
-/** Set by the React toggle handlers; drained + persisted by the NS loop. */
-let outboundSettings: BrainSettings | null = null;
-/** Set by the React button handlers; drained + executed by the NS loop. */
-let outboundAction: 'buyAugs' | 'reset' | null = null;
-
-// ── Presentational components ─────────────────────────────────────────────────
-
-const Toggle = ({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) => (
-	<div
-		onClick={onClick}
-		style={{
-			display: 'flex',
-			justifyContent: 'space-between',
-			alignItems: 'center',
-			cursor: 'pointer',
-			padding: '3px 7px',
-			margin: '2px 0',
-			borderRadius: '3px',
-			border: '1px solid #2a2a2a',
-			background: on ? 'rgba(0,160,0,0.18)' : 'transparent',
-			color: on ? '#4ec94e' : '#999',
-		}}
-	>
-		<span>{label}</span>
-		<span style={{ fontWeight: 'bold' }}>{on ? 'ON' : 'OFF'}</span>
-	</div>
-);
-
-const ActionButton = ({ label, bg, onClick }: { label: string; bg: string; onClick: () => void }) => (
-	<div
-		onClick={onClick}
-		style={{
-			flex: 1,
-			textAlign: 'center',
-			cursor: 'pointer',
-			padding: '5px 6px',
-			margin: '2px',
-			borderRadius: '4px',
-			background: bg,
-			color: 'white',
-			fontWeight: 'bold',
-			userSelect: 'none',
-		}}
-	>
-		{label}
-	</div>
-);
-
-/** The console button injected into the game toolbar. Dispatches the toggle event only. */
+/** The robot console button injected into the game toolbar. Toggles the window. */
 const Gear = () => {
 	const [hover, setHover] = React.useState(false);
 	return (
@@ -152,28 +95,16 @@ const Gear = () => {
 	);
 };
 
-/** Self-owned floating window: draggable, toggled by the gear, mounted on body. */
-const FloatingPanel = ({
-	initial,
-	eventName,
-	onToggle,
-	onBuyAugs,
-	onReset,
-}: {
-	initial: PanelState;
-	eventName: string;
-	onToggle: (next: BrainSettings) => void;
-	onBuyAugs: () => void;
-	onReset: () => void;
-}) => {
-	const [state, setState] = React.useState<PanelState>(initial);
+/** Self-owned floating window: draggable, toggled by the gear, renders the registry. */
+const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName: string }) => {
+	const [state, setState] = React.useState<ConsoleState>(initial);
 	const [open, setOpen] = React.useState<boolean>(false);
 	const [pos, setPos] = React.useState<{ x: number; y: number }>({ x: 240, y: 120 });
 	const drag = React.useRef<{ dx: number; dy: number } | null>(null);
 
-	// Fresh state from the NS loop.
+	// Fresh ConsoleState from the NS loop.
 	React.useEffect(() => {
-		const handler = (e: Event) => setState((e as CustomEvent<PanelState>).detail);
+		const handler = (e: Event) => setState((e as CustomEvent<ConsoleState>).detail);
 		domWindow.addEventListener(eventName, handler);
 		return () => domWindow.removeEventListener(eventName, handler);
 	}, [eventName]);
@@ -186,12 +117,6 @@ const FloatingPanel = ({
 	}, []);
 
 	if (!open) return null;
-
-	const flip = (key: ToggleKey) => {
-		const next = { ...state.settings, [key]: !state.settings[key] };
-		setState({ ...state, settings: next }); // optimistic; loop confirms next tick
-		onToggle(next);
-	};
 
 	const onDown = (e: React.MouseEvent) => { drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; };
 	const onMove = (e: React.MouseEvent) => { if (drag.current) setPos({ x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy }); };
@@ -230,20 +155,18 @@ const FloatingPanel = ({
 					fontWeight: 'bold',
 				}}
 			>
-				<span>⚙ Brain Config</span>
+				<span>Control Console</span>
 				<span style={{ cursor: 'pointer' }} onClick={() => setOpen(false)}>✕</span>
 			</div>
 			<div style={{ padding: '6px 8px' }}>
-				{TOGGLES.map(t => (
-					<Toggle key={t.key} label={t.label} on={state.settings[t.key]} onClick={() => flip(t.key)} />
+				{PANELS.map((p, i) => (
+					<div key={p.id} style={{ marginTop: i === 0 ? 0 : '8px' }}>
+						<div style={{ color: '#8fbf8f', fontWeight: 'bold', margin: '0 0 3px', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.5px' }}>
+							{p.title}
+						</div>
+						{p.render(state, dispatch)}
+					</div>
 				))}
-				<div style={{ color: '#bbb', margin: '6px 0 3px' }}>
-					Pending augs: <span style={{ color: '#e0c050' }}>{state.pendingAugs}</span>
-				</div>
-				<div style={{ display: 'flex' }}>
-					<ActionButton label="Buy augs" bg="#2a6f2a" onClick={onBuyAugs} />
-					<ActionButton label="Reset now" bg="#8a2a2a" onClick={onReset} />
-				</div>
 			</div>
 		</div>
 	);
@@ -302,20 +225,20 @@ function runBuyAugs(ns: NS): void {
 	if (ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) return;
 	const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--purchase');
 	notify(ns, pid > 0
-		? 'Config panel: buying recommended augmentations…'
-		: 'Config panel: aug_planner failed to start (insufficient RAM?)');
+		? 'Control console: buying recommended augmentations…'
+		: 'Control console: aug_planner failed to start (insufficient RAM?)');
 }
 
 /** Install queued augmentations (irreversible) and re-bootstrap after reset. */
 async function runReset(ns: NS): Promise<void> {
-	notify(ns, 'Config panel: installing augmentations and resetting…');
+	notify(ns, 'Control console: installing augmentations and resetting…');
 	try {
 		// Routes through ns_dodge so the 16 GB Singularity cost isn't charged here.
 		// On success the game soft-resets immediately and re-runs /bootstrap.js;
 		// nothing after this line executes.
 		await executeCommand<void>(ns, 'ns.singularity.installAugmentations("/bootstrap.js")');
 	} catch {
-		notify(ns, 'Config panel: install failed — buy augmentations first, or SF4 is required.');
+		notify(ns, 'Control console: install failed — buy augmentations first, or SF4 is required.');
 	}
 }
 
@@ -324,24 +247,15 @@ async function runReset(ns: NS): Promise<void> {
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog('ALL');
 
-	const eventName = `bb-config-${ns.pid}`;
+	const eventName = `bb-console-${ns.pid}`;
 	let current = loadSettings(ns);
-	const initial: PanelState = { settings: current, pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10) };
+	const initial: ConsoleState = { settings: current, pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10) };
 
-	// Self-owned floating panel host on document.body.
+	// Self-owned floating window host on document.body.
 	const panelHost = domDocument.createElement('div');
 	panelHost.id = PANEL_HOST_ID;
 	domDocument.body.appendChild(panelHost);
-	ReactDOM.render(
-		<FloatingPanel
-			initial={initial}
-			eventName={eventName}
-			onToggle={next => { outboundSettings = next; }}
-			onBuyAugs={() => { outboundAction = 'buyAugs'; }}
-			onReset={() => { outboundAction = 'reset'; }}
-		/>,
-		panelHost,
-	);
+	ReactDOM.render(<ConsoleShell initial={initial} eventName={eventName} />, panelHost);
 
 	// Gear button in the toolbar, kept alive across game re-renders.
 	const gearHostRef: { node: HTMLElement | null } = { node: null };
@@ -351,7 +265,7 @@ export async function main(ns: NS): Promise<void> {
 	if (root) observer.observe(root, { childList: true, subtree: true });
 
 	writeMountDiag(ns, gearHostRef.node !== null);
-	ns.print(gearHostRef.node ? 'Config dashboard: gear injected into toolbar' : 'Config dashboard: toolbar anchor not found (see status/ui_mount.json)');
+	ns.print(gearHostRef.node ? 'Control console: gear injected into toolbar' : 'Control console: toolbar anchor not found (see status/ui_mount.json)');
 
 	ns.atExit(() => {
 		observer.disconnect();
@@ -364,27 +278,27 @@ export async function main(ns: NS): Promise<void> {
 	});
 
 	while (true) {
-		// 1. Drain a pending settings edit BEFORE reading state back, so the event
-		//    we dispatch already reflects the user's toggle (no clobber race).
-		if (outboundSettings) {
-			current = outboundSettings;
-			outboundSettings = null;
-			saveSettings(ns, current);
+		// 1. Drain queued intents BEFORE publishing state, so the event we dispatch
+		//    already reflects the user's edits (no clobber race). Order preserved.
+		if (outboundIntents.length) {
+			const intents = outboundIntents;
+			outboundIntents = [];
+			for (const intent of intents) {
+				if (intent.kind === 'setSettings') {
+					current = intent.settings;
+					saveSettings(ns, current);
+				} else if (intent.kind === 'buyAugs') {
+					runBuyAugs(ns);
+				} else if (intent.kind === 'reset') {
+					await runReset(ns); // may reset the game; loop ends there
+				}
+			}
 		}
 
-		// 2. Drain a pending button action.
-		if (outboundAction === 'buyAugs') {
-			outboundAction = null;
-			runBuyAugs(ns);
-		} else if (outboundAction === 'reset') {
-			outboundAction = null;
-			await runReset(ns); // may reset the game; loop ends there
-		}
-
-		// 3. Re-assert the gear (cheap; covers observer gaps) and push fresh state.
+		// 2. Re-assert the gear (cheap; covers observer gaps) and publish fresh state.
 		ensureGear(gearHostRef);
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
-		domWindow.dispatchEvent(new CustomEvent<PanelState>(eventName, { detail: { settings: current, pendingAugs } }));
+		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, { detail: { settings: current, pendingAugs } }));
 
 		await ns.sleep(current.tickIntervalMs);
 	}

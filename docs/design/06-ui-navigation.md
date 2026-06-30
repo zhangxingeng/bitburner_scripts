@@ -125,7 +125,7 @@ Overview hooks confirmed: ids `overview-extra-hook-0/1/2` (and per-stat `overvie
 
 ## §5 Floating panel (built + Tier-1 verified)
 
-`src/ui/config_dashboard.tsx` implements: toolbar button → toggle event → self-owned draggable panel on `document.body` (z-index 10000), 6 autonomy toggles + Buy-augs / Reset-now, NS-loop ↔ React mailbox bridge, `saveSettings` round-trip, `ns.atExit` cleanup. Toolbar selectors corrected to §4 and Tier-1 verified. Button icon is an inlined `@mui/icons-material` Reddit (robot) SVG path with explicit theme-green (`#00cc00`) — MUI isn't on `window`, and `color:inherit` rendered dark-on-dark. **This panel is the seed of the central control console — see [[08-control-console]] for the vision, panel-registry architecture, and incremental migration plan.**
+`src/ui/control_console.tsx` (renamed from `config_dashboard.tsx` in design/08 Step A) implements: toolbar button → toggle event → self-owned draggable window on `document.body` (z-index 10000) that renders a `PANELS` registry; the first panel (`src/ui/panels/config_panel.tsx`) holds the 6 autonomy toggles + Buy-augs / Reset-now. NS-loop ↔ React bridge via per-PID CustomEvent (`ConsoleState`) + an `outboundIntents: Intent[]` queue, `saveSettings` round-trip, `ns.atExit` cleanup. Toolbar selectors corrected to §4 and Tier-1 verified. Button icon is an inlined `@mui/icons-material` Reddit (robot) SVG path with explicit theme-green (`#00cc00`) — MUI isn't on `window`, and `color:inherit` rendered dark-on-dark. **This panel is the seed of the central control console — see [[08-control-console]] for the vision, panel-registry architecture, and incremental migration plan.**
 
 ---
 

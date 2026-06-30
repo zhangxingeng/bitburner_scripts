@@ -4,7 +4,7 @@ import type { NS } from '@ns';
 //
 // Single source of truth for what the player_sequencer may do unattended.
 // Judgment items default OFF (human decides irreversible spends).
-// The config_dashboard UI (§8) renders these as toggles and writes changes back.
+// The control console's ConfigPanel renders these as toggles and writes changes back.
 // No module except this file defines defaults; all callers import DEFAULT_SETTINGS
 // and/or call loadSettings(ns).
 
@@ -61,7 +61,7 @@ export function loadSettings(ns: NS): BrainSettings {
 
 /**
  * Persist `settings` to `status/settings.json` (overwrite mode).
- * Called by the config_dashboard UI on every toggle.
+ * Called by the control console's NS loop when it drains a setSettings intent.
  */
 export function saveSettings(ns: NS, settings: BrainSettings): void {
 	ns.write(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'w');

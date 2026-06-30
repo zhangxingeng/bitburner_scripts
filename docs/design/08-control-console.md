@@ -49,8 +49,8 @@ The config panel already established the safe shape; the console generalizes it.
 ## §5 Migration plan (incremental, no big-bang)
 
 - **M2 (done):** single ConfigPanel + toolbar button + NS↔React bridge + visible Reddit-mascot icon.
-- **Step A — shell refactor:** rename `config_dashboard` → `control_console`; extract the current toggles/actions into a `ConfigPanel` matching the registry shape; behavior unchanged. (Update `SCRIPT_PATHS`/`DAEMON_CATALOG` + any launcher refs.)
-- **Step B — types:** define `ConsoleState` + `dispatch(intent)`; widen the per-tick snapshot the loop builds.
+- **Step A — shell refactor (DONE 2026-06-30):** renamed `config_dashboard` → `control_console`; extracted the toggles/actions into `src/ui/panels/config_panel.tsx` (`configPanel: Panel`); the shell (`ConsoleShell`) renders a `PANELS` registry list; behavior unchanged. `SCRIPT_PATHS.configDashboard`→`controlConsole` + `DAEMON_CATALOG` key updated; old `config_dashboard.{tsx,js}` removed. Typecheck + node-syntax clean; Tier-2 (user) pending. (No new DOM selectors → milestone-2 Tier-1 still covers the injection path.)
+- **Step B — types (DONE alongside A):** `ConsoleState` + `Intent`/`Dispatch`/`Panel` defined in `src/ui/console_types.ts`; the loop drains a single `outboundIntents: Intent[]` queue. `ConsoleState` still minimal (settings + pendingAugs) — widens in Step C.
 - **Step C — MonitorPanel:** read-only reactive display; proves the data path end-to-end.
 - **Step D — DecisionsPanel:** wire to the sequencer's decision queue (reuse `PORT_DECISION` so MCP + console share one queue). The high-value attended-autonomy piece.
 - **Step E — layout polish:** tabs, resize, persistence.
