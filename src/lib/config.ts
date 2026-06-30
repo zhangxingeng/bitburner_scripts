@@ -106,6 +106,17 @@ export const SCRIPT_PATHS = {
     crime:           '/player/crime.js',
     contractSolver:  '/player/contract_solver.js',
     goto:            '/player/goto.js',
+    // player/ subsystem managers (design/11) — persistent daemons walked by the
+    // sequencer's PLAYER_MANAGERS registry; each self-guards on SF/BitNode.
+    contractManager:    '/player/contract_manager.js',
+    gangManager:        '/player/gang_manager.js',
+    corpManager:        '/player/corp_manager.js',
+    bladeburnerManager: '/player/bladeburner_manager.js',
+    sleeveManager:      '/player/sleeve_manager.js',
+    stanekManager:      '/player/stanek_manager.js',
+    graftingManager:    '/player/grafting_manager.js',
+    hacknetStatus:      '/player/hacknet_status.js',
+    stockStatus:        '/player/stock_status.js',
 } as const;
 
 /** Base RAM cost per worker script thread (GB). */

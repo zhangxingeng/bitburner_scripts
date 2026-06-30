@@ -6,6 +6,7 @@ import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
 import { savePlayerState } from '../lib/player_state';
 import { upsertPending, removePending, drainReplies } from '../lib/decisions';
+import { PLAYER_MANAGERS } from '../lib/manager_registry';
 
 /**
  * Player Sequencer — autonomous Thread-P brain daemon.
@@ -47,6 +48,9 @@ const DECISION_DEFER_TICKS = 12;
 
 /** Stable id for the (single) aug-purchase/reset judgment call. */
 const AUG_DECISION_ID = 'augReset';
+
+/** Per-manager crash-guard state for the generalized registry walk (design/11). */
+const managerState = new Map<string, { knownAlive: boolean; failCount: number }>();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -111,6 +115,58 @@ async function publishPlayerState(ns: NS): Promise<void> {
 	}
 }
 
+/**
+ * Walk the PLAYER_MANAGERS registry (design/11 §3.7). For each subsystem manager:
+ * toggle ON → keep the daemon alive (crash-guard: relaunch up to 2 fails, then
+ * notify); toggle OFF → ensure it's stopped. Each manager is a persistent daemon
+ * that self-guards on SF/BitNode availability and idles when its feature is
+ * absent — so "not alive" always means crashed/never-started, never "no SF".
+ *
+ * This is the ONLY place new subsystem managers are launched; adding one is a
+ * registry row + a script, never an edit here (keeps parallel builds disjoint).
+ */
+function tickManagers(ns: NS, settings: ReturnType<typeof loadSettings>): void {
+	for (const spec of PLAYER_MANAGERS) {
+		const enabled = settings[spec.settingKey] === true;
+		const st = managerState.get(spec.id) ?? { knownAlive: false, failCount: 0 };
+		const alive = ns.isRunning(spec.path, 'home');
+
+		if (enabled) {
+			if (alive) {
+				st.knownAlive = true;
+				st.failCount = 0;
+			} else {
+				if (st.knownAlive) {
+					st.knownAlive = false;
+					st.failCount++;
+					ns.print(`WARN: ${spec.label} manager exited unexpectedly (failure #${st.failCount})`);
+					if (st.failCount >= 2) {
+						notify(ns, `${spec.label} manager has exited twice — check its log or RAM headroom`, undefined, { id: spec.id });
+					}
+				}
+				if (st.failCount < 2) {
+					const pid = ns.run(spec.path, 1);
+					if (pid > 0) {
+						ns.print(`${spec.label} manager launched (pid ${pid})`);
+						st.knownAlive = true;
+					} else {
+						ns.print(`WARN: ${spec.label} manager failed to start — insufficient RAM?`);
+					}
+				}
+			}
+		} else {
+			// Disabled — ensure the daemon is stopped and reset its guard state.
+			if (alive) {
+				ns.kill(spec.path, 'home');
+				ns.print(`${spec.label} manager stopped (toggle off)`);
+			}
+			st.knownAlive = false;
+			st.failCount = 0;
+		}
+		managerState.set(spec.id, st);
+	}
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 export async function main(ns: NS): Promise<void> {
@@ -155,6 +211,11 @@ export async function main(ns: NS): Promise<void> {
 			sf4 = await checkSf4(ns);
 			if (sf4) ns.print('SF4 now detected — trusted actions enabled');
 		}
+
+		// Subsystem managers (design/11) — toggle-gated, SF-independent (each self-
+		// guards on its own SF/BitNode). Walked every tick, before the SF4 gate and
+		// the reset/continue branches, so they're maintained in all loop states.
+		tickManagers(ns, settings);
 
 		// ── Apply human/MCP verdicts on the aug/reset decision ────────────────
 		// Responders (control console, MCP agent) push to PORT_DECISION_REPLY; we

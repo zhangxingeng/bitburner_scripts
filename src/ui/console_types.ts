@@ -1,8 +1,9 @@
 import type { ReactElement } from 'react';
-import type { BrainSettings } from '../lib/settings';
+import type { BrainSettings, BooleanSettingKey } from '../lib/settings';
 import type { PendingDecision, Verdict } from '../lib/decisions';
 import type { Notification } from '../cross/notification';
 import type { PlayerSnapshot } from '../lib/player_state';
+import type { SubsystemStatus } from '../lib/subsystem_state';
 
 /**
  * Shared types for the Central Control Console (docs/design/08-control-console.md).
@@ -40,6 +41,7 @@ export interface ConsoleState {
 	logs: Notification[];              // LogPanel        (Wave 1-B) — last N from status/notifications.txt
 	currentPage: string;               // QuickNavPanel   (Wave 1-A) — Navigator.currentPage() or ''
 	player: PlayerSnapshot;            // FactionsPanel   (Wave 1-C) — published by the sequencer
+	subsystems: SubsystemStatus[];     // SubsystemsPanel (design/11) — one per registry manager
 }
 
 /**
@@ -64,7 +66,8 @@ export type Intent =
 	| { kind: 'decide'; id: string; verdict: Verdict }
 	| { kind: 'navigate'; page: string }          // QuickNav → loop calls Navigator.goTo
 	| { kind: 'joinFaction'; faction: string }    // Factions → loop ns_dodge joinFaction
-	| { kind: 'persistUi'; ui: UiState };         // shell → loop writes status/ui_state.json
+	| { kind: 'persistUi'; ui: UiState }          // shell → loop writes status/ui_state.json
+	| { kind: 'toggleSubsystem'; settingKey: BooleanSettingKey; on: boolean }; // SubsystemsPanel → loop flips a settings toggle
 
 export type Dispatch = (intent: Intent) => void;
 

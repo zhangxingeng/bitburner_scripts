@@ -21,7 +21,10 @@ import { PORT_DECISION_REPLY, popPort, pushPort } from './ports';
  * game_agent mirrors to `status/decisions.json`. Different file, different job.
  */
 
-export type DecisionKind = 'augReset' | 'bitNode' | 'spend' | 'generic';
+export type DecisionKind =
+	| 'augReset' | 'bitNode' | 'spend' | 'generic'
+	// subsystem big-spend / irreversible-action kinds (design/11 §3.4)
+	| 'corpInvest' | 'gangWarfare' | 'bladeOp' | 'graft' | 'sleeveSpend';
 export type Verdict = 'approve' | 'deny' | 'defer';
 
 /** A judgment call awaiting a human (or MCP) verdict. `id` is stable per logical decision. */

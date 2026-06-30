@@ -7,6 +7,8 @@ import { executeCommand } from '../lib/ns_dodge';
 import { PORT_AUGS, PORT_PHASE, peekPort } from '../lib/ports';
 import { loadPending, pushReply } from '../lib/decisions';
 import { loadPlayerState } from '../lib/player_state';
+import { loadAllSubsystems } from '../lib/subsystem_state';
+import { SUBSYSTEM_IDS } from '../lib/manager_registry';
 import { goTo, currentPage, GamePage } from '../lib/navigator';
 import type { GamePageValue } from '../lib/navigator';
 import type { Notification } from '../cross/notification';
@@ -17,6 +19,9 @@ import { decisionsPanel } from './panels/decisions_panel';
 import { factionsPanel } from './panels/factions_panel';
 import { quickNavPanel } from './panels/quicknav_panel';
 import { logPanel } from './panels/log_panel';
+import { subsystemsPanel } from './panels/subsystems_panel';
+import { chartsPanel } from './panels/charts_panel';
+import { auditPanel } from './panels/audit_panel';
 
 /**
  * Central Control Console — the brain's in-game UI surface.
@@ -39,7 +44,7 @@ import { logPanel } from './panels/log_panel';
  */
 
 // ── Registered panels (design/08 §4) — order IS the tab order (design/09 §6) ──
-const PANELS: Panel[] = [monitorPanel, decisionsPanel, factionsPanel, quickNavPanel, logPanel, configPanel];
+const PANELS: Panel[] = [monitorPanel, subsystemsPanel, decisionsPanel, factionsPanel, quickNavPanel, chartsPanel, auditPanel, logPanel, configPanel];
 
 /** How many recent notifications the loop hands the LogPanel each tick. */
 const LOG_TAIL = 30;
@@ -455,6 +460,7 @@ export async function main(ns: NS): Promise<void> {
 		logs: gatherLogs(ns),
 		currentPage: currentPage() ?? '',
 		player: loadPlayerState(ns),
+		subsystems: loadAllSubsystems(ns, SUBSYSTEM_IDS),
 	};
 	const initialUi = loadUiState(ns);
 
@@ -489,6 +495,7 @@ export async function main(ns: NS): Promise<void> {
 	let slowDecisions = initial.decisions;
 	let slowLogs = initial.logs;
 	let slowPlayer = initial.player;
+	let slowSubsystems = initial.subsystems;
 
 	while (true) {
 		// 1. Drain queued intents BEFORE publishing state, so the event we dispatch
@@ -514,6 +521,10 @@ export async function main(ns: NS): Promise<void> {
 					await runJoinFaction(ns, intent.faction);
 				} else if (intent.kind === 'persistUi') {
 					saveUiState(ns, intent.ui);
+				} else if (intent.kind === 'toggleSubsystem') {
+					// Flip a subsystem autonomy toggle; the sequencer picks it up next tick.
+					current = { ...current, [intent.settingKey]: intent.on };
+					saveSettings(ns, current);
 				}
 			}
 		}
@@ -525,13 +536,14 @@ export async function main(ns: NS): Promise<void> {
 		// nav highlight, pending-augs) every tick so metrics and the active-page
 		// highlight stay smooth without reading three files at the loop rate.
 		if (tick % SLOW_REFRESH_EVERY === 0) {
-			slowDecisions = loadPending(ns);
-			slowLogs      = gatherLogs(ns);
-			slowPlayer    = loadPlayerState(ns);
+			slowDecisions  = loadPending(ns);
+			slowLogs       = gatherLogs(ns);
+			slowPlayer     = loadPlayerState(ns);
+			slowSubsystems = loadAllSubsystems(ns, SUBSYSTEM_IDS);
 		}
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
 		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
-			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: slowDecisions, logs: slowLogs, currentPage: currentPage() ?? '', player: slowPlayer },
+			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: slowDecisions, logs: slowLogs, currentPage: currentPage() ?? '', player: slowPlayer, subsystems: slowSubsystems },
 		}));
 
 		tick++;

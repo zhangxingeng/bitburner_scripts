@@ -12,16 +12,33 @@ export interface BrainSettings {
 	// ── Autonomy switches (judgment items default OFF) ─────────────────────
 	autoJoinFactions:   boolean;   // default true  — safe; fully reversible
 	autoBuyPrograms:    boolean;   // default true  — safe; fully reversible
-	autoSolveContracts: boolean;   // default false — manual until solver is leaned
+	autoSolveContracts: boolean;   // default false — manual until solver is leaned (contracts manager)
 	autoBuyAugs:        boolean;   // default false — irreversible spend
 	autoReset:          boolean;   // default false — point of no return for current node
 	autoBitNode:        boolean;   // default false — irreversible strategic fork
+
+	// ── Subsystem manager switches (design/11) — SF/BitNode-gated; default OFF ──
+	// Each manager self-guards on availability and no-ops when its SF is absent.
+	autoGang:           boolean;   // default false — gang (SF2/BN2)
+	autoCorp:           boolean;   // default false — corporation (SF3/BN3) [stub this round]
+	autoBladeburner:    boolean;   // default false — bladeburner (SF6/7)
+	autoSleeve:         boolean;   // default false — sleeves (SF10/BN10)
+	autoStanek:         boolean;   // default false — Stanek's Gift (BN13/SF13)
+	autoGrafting:       boolean;   // default false — grafting (BN10/SF10)
+	// Already-autonomous engines, now under the unified model (default ON to preserve behavior):
+	autoHacknet:        boolean;   // default true  — hacknet node/hash manager
+	autoStock:          boolean;   // default true  — stock trading engine
 
 	// ── Tunables ───────────────────────────────────────────────────────────
 	brainRamFloorGb:    number;    // default 16   — home RAM needed to auto-start sequencer
 	verificationDelayMs: number;   // default 500  — wait after action before read-back
 	tickIntervalMs:     number;    // default 5000 — sequencer loop cadence
 }
+
+/** Keys of BrainSettings whose value is boolean — i.e. the autonomy toggles. */
+export type BooleanSettingKey = {
+	[K in keyof BrainSettings]: BrainSettings[K] extends boolean ? K : never;
+}[keyof BrainSettings];
 
 export const DEFAULT_SETTINGS: BrainSettings = {
 	autoJoinFactions:    true,
@@ -30,6 +47,14 @@ export const DEFAULT_SETTINGS: BrainSettings = {
 	autoBuyAugs:         false,
 	autoReset:           false,
 	autoBitNode:         false,
+	autoGang:            false,
+	autoCorp:            false,
+	autoBladeburner:     false,
+	autoSleeve:          false,
+	autoStanek:          false,
+	autoGrafting:        false,
+	autoHacknet:         true,
+	autoStock:           true,
 	brainRamFloorGb:     16,
 	verificationDelayMs: 500,
 	tickIntervalMs:      5000,
