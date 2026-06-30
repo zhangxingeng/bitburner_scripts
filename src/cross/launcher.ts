@@ -1,4 +1,5 @@
 import { NS } from '@ns';
+import { ensureTerminal } from '../lib/navigator';
 
 /**
  * Cross-cutting Player-Puppet Launcher — `cross/launcher.ts`
@@ -48,9 +49,17 @@ export function runTerminalCommand(command: string): boolean {
 
     const input = doc.getElementById('terminal-input') as HTMLInputElement | null;
 
-    // Feature-detect: terminal may not be visible (e.g. running headless or
-    // game update renamed the element).  Signal the caller to use the fallback.
-    if (!input) return false;
+    // Feature-detect: #terminal-input only exists on the Terminal page, so off
+    // it injection silently no-ops (docs/design/06-ui-navigation.md §6). Kick a
+    // navigation back to Terminal via the zero-RAM Navigator; the React re-render
+    // is async so the element won't be ready THIS call — we signal the caller to
+    // fall back / retry, and the next attempt (next tick) lands on Terminal.
+    // For an await-capable single call that waits out the render, use
+    // runTerminalCommandEnsured().
+    if (!input) {
+        ensureTerminal();
+        return false;
+    }
 
     try {
         // React stows synthetic-event props on the DOM element.
@@ -67,6 +76,31 @@ export function runTerminalCommand(command: string): boolean {
     }
 
     return true;
+}
+
+/**
+ * Robust single-call inject for await-capable callers (the in-game brain).
+ *
+ * If the Terminal page isn't active, navigates there via the Navigator and waits
+ * out the async React re-render (polling for #terminal-input up to `timeoutMs`)
+ * before injecting — so one call reliably lands the command regardless of which
+ * page the player is on (docs/design/06-ui-navigation.md §6). Falls back to the
+ * plain primitive once the element exists.
+ *
+ * @returns true if the command was injected, false if Terminal never became
+ *          ready within the timeout (caller should fall back to `ns.exec`).
+ */
+export async function runTerminalCommandEnsured(ns: NS, command: string, timeoutMs = 800): Promise<boolean> {
+    // eslint-disable-next-line no-eval
+    const doc = eval('document') as Document;
+    if (!doc.getElementById('terminal-input')) {
+        ensureTerminal(); // kick the navigation (async React state update)
+        const deadline = Date.now() + timeoutMs;
+        while (!doc.getElementById('terminal-input') && Date.now() < deadline) {
+            await ns.sleep(50);
+        }
+    }
+    return runTerminalCommand(command);
 }
 
 // ── Read-side: screen perception (Mechanism 3b read) ──────────────────────────

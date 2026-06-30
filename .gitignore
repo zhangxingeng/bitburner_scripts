@@ -4,3 +4,5 @@ NetscriptDefinitions.d.ts
 bitburner-src
 example_code_dump
 .claude/settings.local.json
+# Playwright MCP dev-loop working dir + verification screenshots (design/07)
+.playwright-mcp/
