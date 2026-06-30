@@ -42,14 +42,29 @@ export interface ConsoleState {
 	player: PlayerSnapshot;            // FactionsPanel   (Wave 1-C) — published by the sequencer
 }
 
-/** Actions a panel can request. The loop drains the queue and performs the ns.* work. */
+/**
+ * Persisted window chrome (Step E). The shell owns these values in React state;
+ * the loop persists them to status/ui_state.json via the `persistUi` intent and
+ * reloads them at startup. Pure data — no ns.* on the React side (§3).
+ */
+export interface UiState {
+	open: boolean;       // window visible?
+	x: number;           // top-left x (px)
+	y: number;           // top-left y (px)
+	w: number;           // width (px)
+	h: number;           // height (px)
+	activeTab: string;   // id of the visible panel
+}
+
+/** Actions a panel (or the shell) can request. The loop drains + performs ns.* work. */
 export type Intent =
 	| { kind: 'setSettings'; settings: BrainSettings }
 	| { kind: 'buyAugs' }
 	| { kind: 'reset' }
 	| { kind: 'decide'; id: string; verdict: Verdict }
 	| { kind: 'navigate'; page: string }          // QuickNav → loop calls Navigator.goTo
-	| { kind: 'joinFaction'; faction: string };   // Factions → loop ns_dodge joinFaction
+	| { kind: 'joinFaction'; faction: string }    // Factions → loop ns_dodge joinFaction
+	| { kind: 'persistUi'; ui: UiState };         // shell → loop writes status/ui_state.json
 
 export type Dispatch = (intent: Intent) => void;
 

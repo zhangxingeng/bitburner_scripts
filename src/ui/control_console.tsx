@@ -10,7 +10,7 @@ import { loadPlayerState } from '../lib/player_state';
 import { goTo, currentPage, GamePage } from '../lib/navigator';
 import type { GamePageValue } from '../lib/navigator';
 import type { Notification } from '../cross/notification';
-import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot } from './console_types';
+import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot, UiState } from './console_types';
 import { configPanel } from './panels/config_panel';
 import { monitorPanel } from './panels/monitor_panel';
 import { decisionsPanel } from './panels/decisions_panel';
@@ -108,12 +108,35 @@ const Gear = () => {
 	);
 };
 
-/** Self-owned floating window: draggable, toggled by the gear, renders the registry. */
-const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName: string }) => {
+/** Window-chrome minimums so a resize can't shrink the console into uselessness. */
+const MIN_W = 200;
+const MIN_H = 160;
+
+/**
+ * Self-owned floating window: draggable, RESIZABLE, TABBED (Step E). Toggled by
+ * the gear. Renders ONE panel at a time, selected by the tab bar (PANELS order =
+ * tab order). All chrome (open / pos / size / active tab) is persisted to
+ * status/ui_state.json via the `persistUi` intent — never an ns.* call in React
+ * (§3); the loop does the write and seeds `initialUi` at startup.
+ */
+const ConsoleShell = ({ initial, initialUi, eventName }: { initial: ConsoleState; initialUi: UiState; eventName: string }) => {
 	const [state, setState] = React.useState<ConsoleState>(initial);
-	const [open, setOpen] = React.useState<boolean>(false);
-	const [pos, setPos] = React.useState<{ x: number; y: number }>({ x: 240, y: 120 });
-	const drag = React.useRef<{ dx: number; dy: number } | null>(null);
+	const [open, setOpen] = React.useState<boolean>(initialUi.open);
+	const [pos, setPos] = React.useState<{ x: number; y: number }>({ x: initialUi.x, y: initialUi.y });
+	const [size, setSize] = React.useState<{ w: number; h: number }>({ w: initialUi.w, h: initialUi.h });
+	const [activeTab, setActiveTab] = React.useState<string>(initialUi.activeTab);
+	const interaction = React.useRef<
+		| { mode: 'move'; dx: number; dy: number }
+		| { mode: 'resize'; sx: number; sy: number; ow: number; oh: number }
+		| null
+	>(null);
+
+	// Latest persist closure in a ref so the once-registered gear handler always
+	// reads current pos/size/activeTab (avoids stale-closure persistence).
+	const persistRef = React.useRef<(over?: Partial<UiState>) => void>(() => {});
+	persistRef.current = (over = {}) => {
+		dispatch({ kind: 'persistUi', ui: { open, x: pos.x, y: pos.y, w: size.w, h: size.h, activeTab, ...over } });
+	};
 
 	// Fresh ConsoleState from the NS loop.
 	React.useEffect(() => {
@@ -122,18 +145,33 @@ const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName
 		return () => domWindow.removeEventListener(eventName, handler);
 	}, [eventName]);
 
-	// Gear toggle.
+	// Gear toggle — flip open and persist the new visibility.
 	React.useEffect(() => {
-		const handler = () => setOpen(o => !o);
+		const handler = () => setOpen(prev => { const nv = !prev; persistRef.current({ open: nv }); return nv; });
 		domWindow.addEventListener(TOGGLE_EVENT, handler);
 		return () => domWindow.removeEventListener(TOGGLE_EVENT, handler);
 	}, []);
 
 	if (!open) return null;
 
-	const onDown = (e: React.MouseEvent) => { drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; };
-	const onMove = (e: React.MouseEvent) => { if (drag.current) setPos({ x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy }); };
-	const onUp = () => { drag.current = null; };
+	const onTitleDown = (e: React.MouseEvent) => { interaction.current = { mode: 'move', dx: e.clientX - pos.x, dy: e.clientY - pos.y }; };
+	const onResizeDown = (e: React.MouseEvent) => {
+		e.stopPropagation(); // don't start a move
+		interaction.current = { mode: 'resize', sx: e.clientX, sy: e.clientY, ow: size.w, oh: size.h };
+	};
+	const onMove = (e: React.MouseEvent) => {
+		const it = interaction.current;
+		if (!it) return;
+		if (it.mode === 'move') setPos({ x: e.clientX - it.dx, y: e.clientY - it.dy });
+		else setSize({ w: Math.max(MIN_W, it.ow + (e.clientX - it.sx)), h: Math.max(MIN_H, it.oh + (e.clientY - it.sy)) });
+	};
+	// End any drag/resize and persist the final geometry.
+	const onUp = () => { if (interaction.current) { interaction.current = null; persistRef.current(); } };
+
+	const selectTab = (id: string) => { setActiveTab(id); persistRef.current({ activeTab: id }); };
+	const closeWindow = () => { setOpen(false); persistRef.current({ open: false }); };
+
+	const active = PANELS.find(p => p.id === activeTab) ?? PANELS[0];
 
 	return (
 		<div
@@ -145,7 +183,10 @@ const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName
 				left: pos.x,
 				top: pos.y,
 				zIndex: 10000, // above tail windows (~1500)
-				width: '240px',
+				width: size.w,
+				height: size.h,
+				display: 'flex',
+				flexDirection: 'column',
 				background: 'rgba(0,0,0,0.92)',
 				border: '1px solid #4ec94e',
 				borderRadius: '6px',
@@ -153,10 +194,12 @@ const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName
 				fontFamily: 'Consolas, monospace',
 				fontSize: '12px',
 				boxShadow: '0 4px 18px rgba(0,0,0,0.6)',
+				overflow: 'hidden',
 			}}
 		>
+			{/* Title bar (drag handle) */}
 			<div
-				onMouseDown={onDown}
+				onMouseDown={onTitleDown}
 				style={{
 					cursor: 'move',
 					padding: '5px 8px',
@@ -166,21 +209,61 @@ const ConsoleShell = ({ initial, eventName }: { initial: ConsoleState; eventName
 					alignItems: 'center',
 					color: '#4ec94e',
 					fontWeight: 'bold',
+					flexShrink: 0,
 				}}
 			>
 				<span>Control Console</span>
-				<span style={{ cursor: 'pointer' }} onClick={() => setOpen(false)}>✕</span>
+				<span style={{ cursor: 'pointer' }} onClick={closeWindow}>✕</span>
 			</div>
-			<div style={{ padding: '6px 8px' }}>
-				{PANELS.map((p, i) => (
-					<div key={p.id} style={{ marginTop: i === 0 ? 0 : '8px' }}>
-						<div style={{ color: '#8fbf8f', fontWeight: 'bold', margin: '0 0 3px', textTransform: 'uppercase', fontSize: '10px', letterSpacing: '0.5px' }}>
+
+			{/* Tab bar — one panel visible at a time (PANELS order = tab order) */}
+			<div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px', padding: '4px 6px 0', flexShrink: 0 }}>
+				{PANELS.map(p => {
+					const on = p.id === active.id;
+					return (
+						<span
+							key={p.id}
+							onClick={() => selectTab(p.id)}
+							title={p.title}
+							style={{
+								cursor: 'pointer',
+								padding: '2px 6px',
+								borderRadius: '3px 3px 0 0',
+								fontSize: '10px',
+								fontWeight: on ? 'bold' : 'normal',
+								textTransform: 'uppercase',
+								letterSpacing: '0.5px',
+								color: on ? '#0a0a0a' : '#8fbf8f',
+								background: on ? '#4ec94e' : 'rgba(78,201,78,0.10)',
+								userSelect: 'none',
+							}}
+						>
 							{p.title}
-						</div>
-						{p.render(state, dispatch)}
-					</div>
-				))}
+						</span>
+					);
+				})}
 			</div>
+
+			{/* Active panel body (scrolls if it exceeds the window height) */}
+			<div style={{ padding: '6px 8px', overflowY: 'auto', overflowX: 'hidden', flex: 1 }}>
+				{active.render(state, dispatch)}
+			</div>
+
+			{/* Resize handle (bottom-right corner) */}
+			<div
+				onMouseDown={onResizeDown}
+				title="Resize"
+				style={{
+					position: 'absolute',
+					right: 0,
+					bottom: 0,
+					width: '14px',
+					height: '14px',
+					cursor: 'nwse-resize',
+					background: 'linear-gradient(135deg, transparent 50%, #4ec94e 50%, #4ec94e 60%, transparent 60%, transparent 72%, #4ec94e 72%, #4ec94e 82%, transparent 82%)',
+					opacity: 0.6,
+				}}
+			/>
 		</div>
 	);
 };
@@ -288,6 +371,33 @@ async function runJoinFaction(ns: NS, faction: string): Promise<void> {
 	}
 }
 
+// ── Window-state persistence (Step E) ─────────────────────────────────────────
+
+const UI_STATE_FILE = 'status/ui_state.json';
+
+/** First-run window chrome: closed, parked top-left of the play area, tab = Monitor. */
+const DEFAULT_UI: UiState = { open: false, x: 240, y: 120, w: 260, h: 360, activeTab: PANELS[0].id };
+
+/** Read persisted window chrome. Missing/corrupt → DEFAULT_UI; merge guards partial files. */
+function loadUiState(ns: NS): UiState {
+	try {
+		const raw = ns.read(UI_STATE_FILE);
+		if (!raw || raw.trim() === '') return DEFAULT_UI;
+		const parsed = JSON.parse(raw) as Partial<UiState>;
+		const ui: UiState = { ...DEFAULT_UI, ...parsed };
+		// A persisted tab whose panel no longer exists falls back to the first tab.
+		if (!PANELS.some(p => p.id === ui.activeTab)) ui.activeTab = PANELS[0].id;
+		return ui;
+	} catch {
+		return DEFAULT_UI;
+	}
+}
+
+/** Persist window chrome (driven by the shell's persistUi intent). */
+function saveUiState(ns: NS, ui: UiState): void {
+	ns.write(UI_STATE_FILE, JSON.stringify(ui, null, 2), 'w');
+}
+
 /** Launch aug_planner --purchase (same path the sequencer uses for auto-buy). */
 function runBuyAugs(ns: NS): void {
 	if (ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) return;
@@ -336,12 +446,13 @@ export async function main(ns: NS): Promise<void> {
 		currentPage: currentPage() ?? '',
 		player: loadPlayerState(ns),
 	};
+	const initialUi = loadUiState(ns);
 
 	// Self-owned floating window host on document.body.
 	const panelHost = domDocument.createElement('div');
 	panelHost.id = PANEL_HOST_ID;
 	domDocument.body.appendChild(panelHost);
-	ReactDOM.render(<ConsoleShell initial={initial} eventName={eventName} />, panelHost);
+	ReactDOM.render(<ConsoleShell initial={initial} initialUi={initialUi} eventName={eventName} />, panelHost);
 
 	// Gear button in the toolbar, kept alive across game re-renders.
 	const gearHostRef: { node: HTMLElement | null } = { node: null };
@@ -385,6 +496,8 @@ export async function main(ns: NS): Promise<void> {
 					runNavigate(ns, intent.page);
 				} else if (intent.kind === 'joinFaction') {
 					await runJoinFaction(ns, intent.faction);
+				} else if (intent.kind === 'persistUi') {
+					saveUiState(ns, intent.ui);
 				}
 			}
 		}
