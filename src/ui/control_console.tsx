@@ -6,10 +6,17 @@ import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
 import { PORT_AUGS, PORT_PHASE, peekPort } from '../lib/ports';
 import { loadPending, pushReply } from '../lib/decisions';
+import { loadPlayerState } from '../lib/player_state';
+import { goTo, currentPage, GamePage } from '../lib/navigator';
+import type { GamePageValue } from '../lib/navigator';
+import type { Notification } from '../cross/notification';
 import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot } from './console_types';
 import { configPanel } from './panels/config_panel';
 import { monitorPanel } from './panels/monitor_panel';
 import { decisionsPanel } from './panels/decisions_panel';
+import { factionsPanel } from './panels/factions_panel';
+import { quickNavPanel } from './panels/quicknav_panel';
+import { logPanel } from './panels/log_panel';
 
 /**
  * Central Control Console — the brain's in-game UI surface.
@@ -31,8 +38,11 @@ import { decisionsPanel } from './panels/decisions_panel';
  * Mount:  ns.run('/ui/control_console.js', 'home', 1)
  */
 
-// ── Registered panels (design/08 §4 — append here to add a feature) ───────────
-const PANELS: Panel[] = [monitorPanel, decisionsPanel, configPanel];
+// ── Registered panels (design/08 §4) — order IS the tab order (design/09 §6) ──
+const PANELS: Panel[] = [monitorPanel, decisionsPanel, factionsPanel, quickNavPanel, logPanel, configPanel];
+
+/** How many recent notifications the loop hands the LogPanel each tick. */
+const LOG_TAIL = 30;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -239,6 +249,45 @@ function gatherMonitor(ns: NS): MonitorSnapshot {
 	};
 }
 
+/**
+ * Read the last LOG_TAIL notifications game_agent mirrors to status/notifications.txt
+ * (despite the .txt name it holds a JSON array of Notification — see game_agent
+ * mirrorNotify). 0 GB ns.read; newest entries are at the tail. Missing/corrupt → [].
+ */
+function gatherLogs(ns: NS): Notification[] {
+	try {
+		const raw = ns.read('status/notifications.txt');
+		if (!raw || raw.trim() === '') return [];
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed.slice(-LOG_TAIL) as Notification[];
+	} catch {
+		return [];
+	}
+}
+
+/** Valid page strings (Navigator). Guards the navigate intent against junk pages. */
+const PAGE_SET: ReadonlySet<string> = new Set(Object.values(GamePage));
+
+/** Navigate the game to `page` via the Navigator (action-only fiber click; 0 GB). */
+function runNavigate(ns: NS, page: string): void {
+	if (!PAGE_SET.has(page)) { notify(ns, `Control console: unknown page "${page}" — navigation skipped.`); return; }
+	const ok = goTo(page as GamePageValue);
+	if (!ok) notify(ns, `Control console: navigation to "${page}" failed.`);
+}
+
+/** Join a faction on the user's request via ns_dodge (Singularity cost stays off the loop daemon). */
+async function runJoinFaction(ns: NS, faction: string): Promise<void> {
+	try {
+		const ok = await executeCommand<boolean>(ns, `ns.singularity.joinFaction(${JSON.stringify(faction)})`);
+		notify(ns, ok
+			? `Control console: joined faction ${faction}.`
+			: `Control console: could not join ${faction} (no invitation, or SF4 required).`);
+	} catch {
+		notify(ns, `Control console: join ${faction} failed (SF4 required?).`);
+	}
+}
+
 /** Launch aug_planner --purchase (same path the sequencer uses for auto-buy). */
 function runBuyAugs(ns: NS): void {
 	if (ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) return;
@@ -283,6 +332,9 @@ export async function main(ns: NS): Promise<void> {
 		pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10),
 		monitor: gatherMonitor(ns),
 		decisions: loadPending(ns),
+		logs: gatherLogs(ns),
+		currentPage: currentPage() ?? '',
+		player: loadPlayerState(ns),
 	};
 
 	// Self-owned floating window host on document.body.
@@ -329,6 +381,10 @@ export async function main(ns: NS): Promise<void> {
 					// Responder only: forward the verdict to the producer (sequencer),
 					// which owns applying it + clearing the pending entry.
 					pushReply(ns, { id: intent.id, verdict: intent.verdict });
+				} else if (intent.kind === 'navigate') {
+					runNavigate(ns, intent.page);
+				} else if (intent.kind === 'joinFaction') {
+					await runJoinFaction(ns, intent.faction);
 				}
 			}
 		}
@@ -337,7 +393,7 @@ export async function main(ns: NS): Promise<void> {
 		ensureGear(gearHostRef);
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
 		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
-			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: loadPending(ns) },
+			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: loadPending(ns), logs: gatherLogs(ns), currentPage: currentPage() ?? '', player: loadPlayerState(ns) },
 		}));
 
 		await ns.sleep(current.tickIntervalMs);

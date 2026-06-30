@@ -1,6 +1,8 @@
 import type { ReactElement } from 'react';
 import type { BrainSettings } from '../lib/settings';
 import type { PendingDecision, Verdict } from '../lib/decisions';
+import type { Notification } from '../cross/notification';
+import type { PlayerSnapshot } from '../lib/player_state';
 
 /**
  * Shared types for the Central Control Console (docs/design/08-control-console.md).
@@ -33,9 +35,11 @@ export interface MonitorSnapshot {
 export interface ConsoleState {
 	settings: BrainSettings;
 	pendingAugs: number;
-	monitor: MonitorSnapshot;
-	decisions: PendingDecision[];   // judgment calls awaiting a verdict (Step D)
-	// widened further later : notifications[]
+	monitor: MonitorSnapshot;          // MonitorPanel    (Step C)
+	decisions: PendingDecision[];      // DecisionsPanel  (Step D) — judgment calls awaiting a verdict
+	logs: Notification[];              // LogPanel        (Wave 1-B) — last N from status/notifications.txt
+	currentPage: string;               // QuickNavPanel   (Wave 1-A) — Navigator.currentPage() or ''
+	player: PlayerSnapshot;            // FactionsPanel   (Wave 1-C) — published by the sequencer
 }
 
 /** Actions a panel can request. The loop drains the queue and performs the ns.* work. */
@@ -43,7 +47,9 @@ export type Intent =
 	| { kind: 'setSettings'; settings: BrainSettings }
 	| { kind: 'buyAugs' }
 	| { kind: 'reset' }
-	| { kind: 'decide'; id: string; verdict: Verdict };
+	| { kind: 'decide'; id: string; verdict: Verdict }
+	| { kind: 'navigate'; page: string }          // QuickNav → loop calls Navigator.goTo
+	| { kind: 'joinFaction'; faction: string };   // Factions → loop ns_dodge joinFaction
 
 export type Dispatch = (intent: Intent) => void;
 
