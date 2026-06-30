@@ -484,3 +484,18 @@ An agent following this doc should execute in this order:
 - [ ] Encode §4.3 smoke as a repeatable MCP command sequence (a shell script or saved agent step).
 - [ ] After next Bitburner version bump: re-audit ns-augment against new `APIBreaks/*.ts`.
 - [ ] Determine whether `workRepGainRate` (declared but never used in code) should be removed.
+
+---
+
+## §8 Live-validation findings (first harness run, 2026-06-30)
+
+A Sonnet agent ran §1.3 startup + the §2/§3 smoke against the dev build. **All smoke targets passed:** `dev/cheat.js --sf 4` ran with no `formatNumber` crash; the sequencer produced `status/player_state.json` + `status/subsystems/{gang,hacknet,stock}.json` + heartbeat (confirming the "stale console = no producer running" diagnosis); and after `--sf 2 --karma -54000` + faction membership, `gang.json` went `available:true, running:true` ("Slum Snakes — 3 members"). The §4.2/§5.2 `ns.cloud.*` migration is **DONE** (commit `58e135a`), so those 🔴 rows are resolved.
+
+Operational gotchas to fold into the harness procedure:
+
+1. **RFA port not persisted across game loads.** Fresh load → `get_status` shows `game:false`; reconnect via Options → Remote API → Port 12525 → Connect. Ordering matters: connect → `game:true` → only then does `push_file` work.
+2. **claude-in-chrome may be absent** (extension not installed) → fall back to `mcp__playwright__*`. Both are valid Step-3 bootstrap browsers.
+3. **⚠ Terminal submit — VERIFY before trusting/fixing.** The agent reports the MCP path (WS → `game_agent` → `runTerminalCommand`) sets the React input value but does NOT submit: its synthetic `onKeyDown({key:'Enter'})` updates state without firing the submit flow, so a native Playwright `press Enter` was needed. This is UNVERIFIED by the lead. Before acting: read `cross/game_agent.ts` `runTerminalCommand` and `cross/launcher.ts`, and determine whether the **brain's own launcher** shares the defect (foundational if so). Same React-synthetic-vs-native theme as [[12-navigation-interaction-layer]] §1's isTrusted audit; do not assume per [[mcp-act-path-gotchas]].
+4. **`game_agent` ≈ 8 GB.** On a fresh 8 GB home it leaves no room for `cheat.js` (chicken-egg for `--ram`). Dev workaround: set `Player.getHomeComputer().maxRam` directly via Playwright before cheating. NOTE: `game_agent` is the MCP/attended control channel — NOT required for headless autoplay — so this is a dev-loop cost, not an autoplay blocker.
+5. **No `notifications.txt` in steady state is HEALTHY** — the sequencer only notifies on events (e.g. "SF4 missing"); a quiet baseline = no news, not a failure.
+6. **Playwright MCP `browser_click`/`browser_type` need a `target`/ref arg** not obvious from the tool name; `browser_evaluate` is the reliable fallback for in-page logic.
