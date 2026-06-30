@@ -2,11 +2,12 @@ import type { NS } from '@ns';
 import { React, ReactDOM, domWindow, domDocument } from '../lib/react';
 import { loadSettings, saveSettings, BrainSettings } from '../lib/settings';
 import { SCRIPT_PATHS } from '../lib/config';
-import { PORT_AUGS, peekPort } from '../lib/ports';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
-import type { ConsoleState, Intent, Dispatch, Panel } from './console_types';
+import { PORT_AUGS, PORT_PHASE, peekPort } from '../lib/ports';
+import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot } from './console_types';
 import { configPanel } from './panels/config_panel';
+import { monitorPanel } from './panels/monitor_panel';
 
 /**
  * Central Control Console — the brain's in-game UI surface.
@@ -29,7 +30,7 @@ import { configPanel } from './panels/config_panel';
  */
 
 // ── Registered panels (design/08 §4 — append here to add a feature) ───────────
-const PANELS: Panel[] = [configPanel];
+const PANELS: Panel[] = [monitorPanel, configPanel];
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,22 @@ function writeMountDiag(ns: NS, anchored: boolean): void {
 
 // ── NS loop helpers (all ns.* lives here, outside React) ──────────────────────
 
+/**
+ * Build the live MonitorSnapshot (design/08 §4.2). Every read here is cheap and
+ * legitimately-held: home RAM/money, total script income, running-script count,
+ * and the phase string the detector publishes on PORT_PHASE. No game internals.
+ */
+function gatherMonitor(ns: NS): MonitorSnapshot {
+	return {
+		ramUsed:      ns.getServerUsedRam('home'),
+		ramMax:       ns.getServerMaxRam('home'),
+		money:        ns.getServerMoneyAvailable('home'),
+		incomePerSec: ns.getTotalScriptIncome()[0],
+		phase:        peekPort(ns, PORT_PHASE) ?? '—',
+		scriptCount:  ns.ps('home').length,
+	};
+}
+
 /** Launch aug_planner --purchase (same path the sequencer uses for auto-buy). */
 function runBuyAugs(ns: NS): void {
 	if (ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) return;
@@ -249,7 +266,11 @@ export async function main(ns: NS): Promise<void> {
 
 	const eventName = `bb-console-${ns.pid}`;
 	let current = loadSettings(ns);
-	const initial: ConsoleState = { settings: current, pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10) };
+	const initial: ConsoleState = {
+		settings: current,
+		pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10),
+		monitor: gatherMonitor(ns),
+	};
 
 	// Self-owned floating window host on document.body.
 	const panelHost = domDocument.createElement('div');
@@ -298,7 +319,9 @@ export async function main(ns: NS): Promise<void> {
 		// 2. Re-assert the gear (cheap; covers observer gaps) and publish fresh state.
 		ensureGear(gearHostRef);
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
-		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, { detail: { settings: current, pendingAugs } }));
+		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
+			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns) },
+		}));
 
 		await ns.sleep(current.tickIntervalMs);
 	}

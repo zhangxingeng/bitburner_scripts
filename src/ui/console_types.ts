@@ -13,11 +13,27 @@ import type { BrainSettings } from '../lib/settings';
  * later steps (RAM/income/phase for MonitorPanel, decisions[] for DecisionsPanel).
  */
 
+/**
+ * Live system metrics gathered by the NS loop each tick (Step C — MonitorPanel).
+ * All fields come from cheap, legitimately-held ns.* reads (home RAM, money,
+ * script income) plus the phase string the detector publishes on PORT_PHASE —
+ * never from React/game internals (§3 capability boundary).
+ */
+export interface MonitorSnapshot {
+	ramUsed: number;       // home used RAM (GB)
+	ramMax: number;        // home max RAM (GB)
+	money: number;         // current money ($)
+	incomePerSec: number;  // total script income ($/s)
+	phase: string;         // DesignPhase string from PORT_PHASE ('—' if unset)
+	scriptCount: number;   // running scripts on home
+}
+
 /** Read-only snapshot the NS loop dispatches to the React tree each tick. */
 export interface ConsoleState {
 	settings: BrainSettings;
 	pendingAugs: number;
-	// widened by Step C+ : ram, income, phase, decisions[], notifications[]
+	monitor: MonitorSnapshot;
+	// widened further in Step D+ : decisions[], notifications[]
 }
 
 /** Actions a panel can request. The loop drains the queue and performs the ns.* work. */
