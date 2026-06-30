@@ -51,6 +51,16 @@ const PANEL_HOST_ID = 'bb-brain-panel-host';
 const TOGGLE_EVENT = 'bb-brain-panel-toggle';
 
 /**
+ * Console loop cadence — deliberately decoupled from settings.tickIntervalMs
+ * (the sequencer's 5 s cadence). The UI must feel responsive: an intent (e.g. a
+ * nav click) is drained at the top of the loop, so this is the worst-case
+ * click→action latency. 200 ms is imperceptible yet cheap.
+ */
+const CONSOLE_TICK_MS = 200;
+/** Refresh slow-changing data (decisions/logs/player) every Nth tick (~1 Hz). */
+const SLOW_REFRESH_EVERY = 5;
+
+/**
  * Toolbar button icon. MUI isn't exposed on window (only React/ReactDOM are), so
  * we inline the SVG path from the game's own @mui/icons-material set rather than
  * importing the component. This is the "Reddit" mascot (robot-ish) — the control
@@ -474,6 +484,12 @@ export async function main(ns: NS): Promise<void> {
 		}
 	});
 
+	// Slow-changing data cache (refreshed ~1 Hz in the loop), seeded from `initial`.
+	let tick = 0;
+	let slowDecisions = initial.decisions;
+	let slowLogs = initial.logs;
+	let slowPlayer = initial.player;
+
 	while (true) {
 		// 1. Drain queued intents BEFORE publishing state, so the event we dispatch
 		//    already reflects the user's edits (no clobber race). Order preserved.
@@ -504,11 +520,21 @@ export async function main(ns: NS): Promise<void> {
 
 		// 2. Re-assert the gear (cheap; covers observer gaps) and publish fresh state.
 		ensureGear(gearHostRef);
+
+		// Slow-changing data (file reads) refresh ~1 Hz; fast data (RAM/income,
+		// nav highlight, pending-augs) every tick so metrics and the active-page
+		// highlight stay smooth without reading three files at the loop rate.
+		if (tick % SLOW_REFRESH_EVERY === 0) {
+			slowDecisions = loadPending(ns);
+			slowLogs      = gatherLogs(ns);
+			slowPlayer    = loadPlayerState(ns);
+		}
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
 		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
-			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: loadPending(ns), logs: gatherLogs(ns), currentPage: currentPage() ?? '', player: loadPlayerState(ns) },
+			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: slowDecisions, logs: slowLogs, currentPage: currentPage() ?? '', player: slowPlayer },
 		}));
 
-		await ns.sleep(current.tickIntervalMs);
+		tick++;
+		await ns.sleep(CONSOLE_TICK_MS);
 	}
 }
