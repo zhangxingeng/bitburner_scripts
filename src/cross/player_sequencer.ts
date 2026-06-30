@@ -4,6 +4,7 @@ import { DesignPhase, PHASE_RESET_MIN_AUGS, SCRIPT_PATHS } from '../lib/config';
 import { loadSettings } from '../lib/settings';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
+import { savePlayerState } from '../lib/player_state';
 import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 
 /**
@@ -65,6 +66,49 @@ async function checkSf4(ns: NS): Promise<boolean> {
 /** Count how many port-opener .exe files currently exist on home. */
 function countOpeners(ns: NS): number {
 	return PORT_OPENER_FILES.filter(f => ns.fileExists(f, 'home')).length;
+}
+
+// ── Player-state publisher ────────────────────────────────────────────────────
+
+/**
+ * Gather faction/aug/character info via the RAM-dodge and publish a
+ * PlayerSnapshot to `status/player_state.json` for the control console to read
+ * cheaply (lib/player_state.ts). All Singularity calls run inside ONE batched
+ * dodger expression so their 16 GB cost is paid by the temp script, not this
+ * daemon. On failure (no SF4, RAM starved, dodger error) we log and leave the
+ * prior snapshot untouched — never overwrite with empties.
+ */
+async function publishPlayerState(ns: NS): Promise<void> {
+	try {
+		const snap = await executeCommand<{
+			factions: string[];
+			invitations: string[];
+			augsOwned: number;
+			augsPending: number;
+			hackingLevel: number;
+			city: string;
+		}>(
+			ns,
+			`(() => { const p = ns.getPlayer();
+				const owned     = ns.singularity.getOwnedAugmentations(false);
+				const purchased = ns.singularity.getOwnedAugmentations(true);
+				return {
+					factions:     p.factions,
+					invitations:  ns.singularity.checkFactionInvitations(),
+					augsOwned:    owned.length,
+					augsPending:  purchased.length - owned.length,
+					hackingLevel: p.skills.hacking,
+					city:         p.city,
+				}; })()`,
+		);
+		if (snap == null) {
+			ns.print('WARN: publishPlayerState: no data returned (SF4 unavailable or script failed)');
+			return;
+		}
+		savePlayerState(ns, { ts: Date.now(), ...snap });
+	} catch (err) {
+		ns.print(`WARN: publishPlayerState failed — ${err}`);
+	}
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -197,6 +241,15 @@ export async function main(ns: NS): Promise<void> {
 		}
 
 		// ── Trusted actions (SF4 present) ─────────────────────────────────────
+
+		// ── player-state publisher (slow cadence: startup + every 6 ticks ≈ 30 s) ──
+		//
+		// Feeds the control console's FactionsPanel (status/player_state.json).
+		// Singularity cost is borne by the temp dodger — ~0 GB to this daemon.
+		// Failure is silent (prior snapshot kept); never crashes the sequencer.
+		if (tick % 6 === 1) {
+			await publishPlayerState(ns);
+		}
 
 		// ── faction_manager — persistent daemon ───────────────────────────────
 		//

@@ -1,6 +1,7 @@
 import { NS } from '@ns';
 import { runTerminalCommand, readScreen } from './launcher';
 import { PORT_HEARTBEAT, PORT_DECISION, PORT_LAUNCHER, PORT_NOTIFY, popPort, peekPort, pushPort } from '../lib/ports';
+import { loadPending, pushReply, type PendingDecision, type Verdict } from '../lib/decisions';
 
 /**
  * Game Agent — real-time control channel + file↔port relay daemon on home.
@@ -46,7 +47,7 @@ import { PORT_HEARTBEAT, PORT_DECISION, PORT_LAUNCHER, PORT_NOTIFY, popPort, pee
 
 interface GameCommand {
     id:       string;
-    method:   'run' | 'kill' | 'ps' | 'getPlayer' | 'getServer' | 'readPort' | 'writePort' | 'peekPort' | 'terminal' | 'ping';
+    method:   'run' | 'kill' | 'ps' | 'getPlayer' | 'getServer' | 'readPort' | 'writePort' | 'peekPort' | 'terminal' | 'ping' | 'decide';
     script?:  string;
     host?:    string;
     threads?: number;
@@ -392,6 +393,21 @@ function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
                 break;
             }
 
+            case 'decide': {
+                // Verdict command: data = { id: string; verdict: 'approve'|'deny'|'defer' }
+                const payload    = cmd.data as { id?: unknown; verdict?: unknown } | null | undefined;
+                const decisionId = payload && typeof payload.id === 'string' ? payload.id : null;
+                const verdict    = payload && typeof payload.verdict === 'string' ? payload.verdict : null;
+                if (!decisionId || decisionId === '') { result.error = 'Missing or invalid id'; break; }
+                if (verdict !== 'approve' && verdict !== 'deny' && verdict !== 'defer') {
+                    result.error = `Invalid verdict: ${String(verdict)}`; break;
+                }
+                const pushed = pushReply(ns, { id: decisionId, verdict: verdict as Verdict });
+                result.success = pushed;
+                if (!pushed) result.error = 'Port full';
+                break;
+            }
+
             default:
                 result.error = `Unknown method: ${(cmd as any).method}`;
         }
@@ -552,6 +568,20 @@ function handleControlCmd(
             case 'ping':
                 return { t: 'res', id, ok: true, data: { pong: Date.now() } };
 
+            case 'decide': {
+                // Verdict command: params = { id: string; verdict: 'approve'|'deny'|'defer' }
+                const decisionId = params['id'];
+                const verdict    = params['verdict'];
+                if (typeof decisionId !== 'string' || decisionId === '') {
+                    return { t: 'res', id, ok: false, error: 'Missing or invalid id' };
+                }
+                if (verdict !== 'approve' && verdict !== 'deny' && verdict !== 'defer') {
+                    return { t: 'res', id, ok: false, error: `Invalid verdict: ${String(verdict)}` };
+                }
+                const pushed = pushReply(ns, { id: decisionId, verdict: verdict as Verdict });
+                return { t: 'res', id, ok: pushed, data: { pushed }, ...(pushed ? {} : { error: 'Port full' }) };
+            }
+
             default:
                 return { t: 'res', id, ok: false, error: `Unknown method: ${method}` };
         }
@@ -673,6 +703,12 @@ export async function main(ns: NS): Promise<void> {
                 // Drain PORT_NOTIFY → status/notifications.txt; capture for WS push
                 const notifications = mirrorNotify(ns);
 
+                // Read pending judgment calls from status/decisions_pending.json.
+                // loadPending is a pure ns.read — cheap, zero side effects, no ports touched.
+                // Exposed to the remote agent via the 'decisions_pending' WS state channel so
+                // it can see (and reply to) the same queue the in-game DecisionsPanel shows.
+                const pendingDecisions: PendingDecision[] = loadPending(ns);
+
                 // Mirror rendered terminal tail → status/screen.txt (~1 s cadence);
                 // returns non-null only on tick % 5 === 0 boundaries
                 const screenText = mirrorScreen(ns, tick);
@@ -689,6 +725,10 @@ export async function main(ns: NS): Promise<void> {
                     if (screenText !== null)       pushState('screen', screenText);
                     // Heartbeat every mirror cycle — cheap peek, conveys liveness to the bridge
                     pushState('heartbeat', heartbeat);
+                    // Pending judgment calls — push every cycle (current snapshot, not a diff)
+                    // so the remote agent always has an up-to-date view of the queue even when
+                    // no new items arrived.  Empty array signals "nothing awaiting verdict."
+                    pushState('decisions_pending', pendingDecisions);
                 }
 
                 // Check for incoming MCP command (RFA file-relay fallback)
