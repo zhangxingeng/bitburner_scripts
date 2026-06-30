@@ -31,6 +31,19 @@ const PANEL_HOST_ID = 'bb-brain-panel-host';
 const TOGGLE_EVENT = 'bb-brain-panel-toggle';
 
 /**
+ * Toolbar button icon. MUI isn't exposed on window (only React/ReactDOM are), so
+ * we inline the SVG path from the game's own @mui/icons-material set rather than
+ * importing the component. This is the "Reddit" mascot (robot-ish) — the control
+ * console is the brain's face. 24px + currentColor matches the sibling SvgIcons
+ * (save/Remote-API/kill); an explicit theme-green color fixes the earlier
+ * dark-on-dark invisibility (color:inherit resolved to the dark text color).
+ */
+const CONSOLE_ICON_PATH =
+	'M22 12.14a2.19 2.19 0 0 0-3.71-1.57 10.93 10.93 0 0 0-5.86-1.87l1-4.7 3.27.71a1.56 1.56 0 1 0 .16-.76l-3.64-.77c-.11-.02-.22 0-.29.06-.09.05-.14.14-.16.26l-1.11 5.22c-2.33.07-4.43.78-5.95 1.86A2.2 2.2 0 0 0 4.19 10a2.16 2.16 0 0 0-.9 4.15 3.6 3.6 0 0 0-.05.66c0 3.37 3.92 6.12 8.76 6.12s8.76-2.73 8.76-6.12c0-.21-.01-.44-.05-.66A2.21 2.21 0 0 0 22 12.14M7 13.7c0-.86.68-1.56 1.54-1.56s1.56.7 1.56 1.56a1.56 1.56 0 0 1-1.56 1.56c-.86.02-1.54-.7-1.54-1.56m8.71 4.14C14.63 18.92 12.59 19 12 19c-.61 0-2.65-.1-3.71-1.16a.4.4 0 0 1 0-.57.4.4 0 0 1 .57 0c.68.68 2.14.91 3.14.91s2.47-.23 3.14-.91a.4.4 0 0 1 .57 0c.14.16.14.41 0 .57m-.29-2.56c-.86 0-1.56-.7-1.56-1.56a1.56 1.56 0 0 1 1.56-1.56c.86 0 1.58.7 1.58 1.56a1.6 1.6 0 0 1-1.58 1.56z';
+/** Theme-primary green (matches the default-theme active accent / save icon). */
+const CONSOLE_ICON_COLOR = '#00cc00';
+
+/**
  * Stable toolbar anchor (docs/design/06-ui-navigation.md §4, from bitburner-src
  * CharacterOverview.tsx). The Save / Remote-API / Kill-all row is a class-less
  * flex Box; the "kill all scripts" IconButton is the only stable hook. Its
@@ -110,24 +123,34 @@ const ActionButton = ({ label, bg, onClick }: { label: string; bg: string; onCli
 	</div>
 );
 
-/** The ⚙ gear injected into the game toolbar. Dispatches the toggle event only. */
-const Gear = () => (
-	<span
-		title="Brain Config"
-		onClick={() => domWindow.dispatchEvent(new Event(TOGGLE_EVENT))}
-		style={{
-			cursor: 'pointer',
-			font: 'inherit',
-			color: 'inherit',
-			fontSize: '1.2em',
-			padding: '0 6px',
-			userSelect: 'none',
-			lineHeight: 1,
-		}}
-	>
-		⚙
-	</span>
-);
+/** The console button injected into the game toolbar. Dispatches the toggle event only. */
+const Gear = () => {
+	const [hover, setHover] = React.useState(false);
+	return (
+		<span
+			title="Control Console"
+			onClick={() => domWindow.dispatchEvent(new Event(TOGGLE_EVENT))}
+			onMouseEnter={() => setHover(true)}
+			onMouseLeave={() => setHover(false)}
+			style={{
+				display: 'inline-flex',
+				alignItems: 'center',
+				justifyContent: 'center',
+				cursor: 'pointer',
+				padding: '8px', // matches MUI IconButton → same 40px height as siblings
+				borderRadius: '50%',
+				color: CONSOLE_ICON_COLOR,
+				background: hover ? 'rgba(0,204,0,0.12)' : 'transparent',
+				transition: 'background 120ms',
+				userSelect: 'none',
+			}}
+		>
+			<svg viewBox="0 0 24 24" width={24} height={24} fill="currentColor" aria-hidden="true">
+				<path d={CONSOLE_ICON_PATH} />
+			</svg>
+		</span>
+	);
+};
 
 /** Self-owned floating window: draggable, toggled by the gear, mounted on body. */
 const FloatingPanel = ({

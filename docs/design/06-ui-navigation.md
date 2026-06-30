@@ -123,9 +123,9 @@ Overview hooks confirmed: ids `overview-extra-hook-0/1/2` (and per-stat `overvie
 
 ---
 
-## §5 Floating panel (already built — minor follow-up)
+## §5 Floating panel (built + Tier-1 verified)
 
-`src/ui/config_dashboard.tsx` already implements: gear → toggle event → self-owned draggable panel on `document.body` (z-index 10000), 6 autonomy toggles + Buy-augs / Reset-now, NS-loop ↔ React mailbox bridge, `saveSettings` round-trip, `ns.atExit` cleanup. **Only change needed:** swap the guessed toolbar selectors for the §4 real ones. The panel logic itself stands.
+`src/ui/config_dashboard.tsx` implements: toolbar button → toggle event → self-owned draggable panel on `document.body` (z-index 10000), 6 autonomy toggles + Buy-augs / Reset-now, NS-loop ↔ React mailbox bridge, `saveSettings` round-trip, `ns.atExit` cleanup. Toolbar selectors corrected to §4 and Tier-1 verified. Button icon is an inlined `@mui/icons-material` Reddit (robot) SVG path with explicit theme-green (`#00cc00`) — MUI isn't on `window`, and `color:inherit` rendered dark-on-dark. **This panel is the seed of the central control console — see [[08-control-console]] for the vision, panel-registry architecture, and incremental migration plan.**
 
 ---
 
