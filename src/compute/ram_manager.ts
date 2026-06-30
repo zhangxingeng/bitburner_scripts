@@ -68,7 +68,7 @@ export class RamManager {
         ].join('\n'));
 
         // Purchased servers
-        const purchasedServers = this.ns.getPurchasedServers();
+        const purchasedServers = this.ns.cloud.getServerNames();
         const purchasedSet = new Set(purchasedServers);
         for (const server of purchasedServers) {
             const maxRam = this.ns.getServerMaxRam(server);

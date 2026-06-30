@@ -143,7 +143,7 @@ export function calculateHackThreads(ns: NS, target: string, hackFraction = 0.5)
 export function getHackableServers(ns: NS, servers?: string[]): string[] {
     const serverList = servers ?? findAllServers(ns);
     const hackLevel = ns.getHackingLevel();
-    const purchased = ns.getPurchasedServers();
+    const purchased = ns.cloud.getServerNames();
     const levels = new Map<string, number>();
 
     const hackable: string[] = [];

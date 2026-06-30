@@ -372,7 +372,7 @@ export class BatchHackManager {
     }
 
     private terminateTargetProcesses(target: string): void {
-        const serverList = [...this.ns.getPurchasedServers(), 'home'];
+        const serverList = [...this.ns.cloud.getServerNames(), 'home'];
         const scripts = [SCRIPT_PATHS.hack, SCRIPT_PATHS.grow, SCRIPT_PATHS.weaken1, SCRIPT_PATHS.weaken2];
 
         for (const server of serverList) {

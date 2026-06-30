@@ -176,7 +176,7 @@ async function backdoorService(ns: NS): Promise<void> {
 
 /** Collect servers that need a backdoor, in priority order. */
 function collectEligibleServers(ns: NS, serverPaths: Map<string, string[]>): string[] {
-    const boughtServers = new Set(ns.getPurchasedServers());
+    const boughtServers = new Set(ns.cloud.getServerNames());
     const story:  string[] = [];
     const corp:   string[] = [];
     const other:  string[] = [];

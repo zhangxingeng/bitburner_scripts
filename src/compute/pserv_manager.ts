@@ -51,13 +51,13 @@ function calcPservBudget(ns: NS): number {
 // ── Purchased-server helpers (from tools/purchase_server.ts) ─────────────────
 
 function getCostByRam(ns: NS, targetRam: number): number {
-    return ns.getPurchasedServerCost(targetRam);
+    return ns.cloud.getServerCost(targetRam);
 }
 
 function isAllMaxed(ns: NS, maxRam: number): boolean {
-    const ownServers = ns.getPurchasedServers();
+    const ownServers = ns.cloud.getServerNames();
     const serverRams = ownServers.map(s => ns.getServerMaxRam(s));
-    const maxCount = ns.getPurchasedServerLimit();
+    const maxCount = ns.cloud.getServerLimit();
     return ownServers.length >= maxCount && serverRams.every(ram => ram >= maxRam);
 }
 
@@ -74,8 +74,8 @@ function getRequiredPowerDifference(currentRam: number): number {
 }
 
 function planNextTarget(ns: NS, minInitialRam: number): { targetServer: string, currentRam: number, isNew: boolean } {
-    const ownServers = ns.getPurchasedServers();
-    const maxCount = ns.getPurchasedServerLimit();
+    const ownServers = ns.cloud.getServerNames();
+    const maxCount = ns.cloud.getServerLimit();
 
     if (ownServers.length < maxCount) {
         return { targetServer: `pserv-${padNum(ownServers.length, 2)}`, currentRam: 0, isNew: true };
@@ -119,7 +119,7 @@ function estimateCost(
 }
 
 function buyServer(ns: NS, serverName: string, ram: number): boolean {
-    const purchasedName = ns.purchaseServer(serverName, ram);
+    const purchasedName = ns.cloud.purchaseServer(serverName, ram);
     if (purchasedName) {
         ns.print(`Purchased new server ${purchasedName} with ${formatRam(ram)} RAM`);
         return true;
@@ -130,7 +130,7 @@ function buyServer(ns: NS, serverName: string, ram: number): boolean {
 
 function deleteServer(ns: NS, server: string): boolean {
     ns.killall(server);
-    return ns.deleteServer(server);
+    return ns.cloud.deleteServer(server);
 }
 
 function upgradeServer(ns: NS, server: string, currentRam: number, newRam: number): boolean {
@@ -158,7 +158,7 @@ function tryUpgradePserv(ns: NS, budget: number): void {
         ns.print('All purchased servers are at max RAM.');
         return;
     }
-    const minCost = ns.getPurchasedServerCost(MIN_INITIAL_RAM);
+    const minCost = ns.cloud.getServerCost(MIN_INITIAL_RAM);
     if (budget < minCost) {
         ns.print(`Budget ${formatRam(budget)} too low for min-tier server (${formatRam(minCost)})`);
         return;

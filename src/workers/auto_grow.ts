@@ -28,7 +28,7 @@ export async function main(ns: NS): Promise<void> {
 
         // Exit when server is prepared (thresholds match TARGET_MONEY_THRESHOLD / TARGET_SECURITY_THRESHOLD in lib/config)
         if (moneyPercent >= 0.9 && securityDiff <= 3) {
-            ns.print(`${target} prepared: Money ${ns.formatNumber(currentMoney)}/${ns.formatNumber(maxMoney)}, Security ${currentSecurity.toFixed(2)}/${minSecurity.toFixed(2)}`);
+            ns.print(`${target} prepared: Money ${ns.format.number(currentMoney)}/${ns.format.number(maxMoney)}, Security ${currentSecurity.toFixed(2)}/${minSecurity.toFixed(2)}`);
             break;
         }
 
@@ -39,7 +39,7 @@ export async function main(ns: NS): Promise<void> {
         }
         // Then money
         else {
-            ns.print(`Growing ${target}: Money ${ns.formatNumber(currentMoney)}/${ns.formatNumber(maxMoney)} (${(moneyPercent * 100).toFixed(2)}%)`);
+            ns.print(`Growing ${target}: Money ${ns.format.number(currentMoney)}/${ns.format.number(maxMoney)} (${(moneyPercent * 100).toFixed(2)}%)`);
             await ns.grow(target);
         }
     }

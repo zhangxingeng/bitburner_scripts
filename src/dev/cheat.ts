@@ -1,57 +1,70 @@
 import type { NS } from '@ns';
 
 /**
- * ⚠️ DEV-ONLY cheat tool — NOT part of the autonomous gameplay system.
+ * ⚠️ DEV-ONLY surgical cheat tool — NOT part of the autonomous gameplay system.
  *
  * Boundary (user-ratified 2026-06-30): cheating is for DEVELOPMENT ONLY. This
  * script is deliberately segregated under src/dev/, is NEVER imported by any
  * production module, and is NEVER auto-launched (absent from SCRIPT_PATHS /
- * DAEMON_CATALOG / the manager registry). It exists solely to validate
- * SF/BitNode-gated automation (gang/corp/bladeburner/sleeve/stanek/grafting,
- * and SF4 Singularity) in a dev game without grinding to unlock the SourceFiles.
+ * DAEMON_CATALOG / the manager registry). In a PRODUCTION build the live Player
+ * singleton is undefined, so this script no-ops with an error — the guard IS the
+ * boundary.
+ *
+ * PHILOSOPHY (user 2026-06-30): grant NOTHING by default. Each invocation must
+ * name exactly the capability it wants to unlock. Rationale: the point of a
+ * cheat is to test ONE gated feature (e.g. SF4 Singularity) under otherwise-real
+ * conditions. Blanket grants (piles of money/RAM) MASK bugs that would otherwise
+ * be obvious. So: surgical, opt-in, one knob at a time.
+ *
+ *   run /dev/cheat.js                       # no-op — prints status + usage
+ *   run /dev/cheat.js --sf 4                # unlock ONLY SF4 (Singularity), nothing else
+ *   run /dev/cheat.js --sf 2,3,6 --level 3  # unlock these SFs at level 3
+ *   run /dev/cheat.js --money 1e9           # set ONLY money
+ *   run /dev/cheat.js --ram 256             # set ONLY home max RAM (GB)
+ *   run /dev/cheat.js --exp 1e6             # dump exp into every skill, relevel
+ *   run /dev/cheat.js --karma -54000        # set ONLY karma (gang threshold = -54000)
+ *   run /dev/cheat.js --help
  *
  * How it works (recon of ../bitburner-src): dev builds expose the live Player
- * singleton at `globalThis.Bitburner.Player` (src/engine.tsx, gated on
+ * singleton at globalThis.Bitburner.Player (src/engine.tsx, gated on
  * NODE_ENV==='development'). We reach it via eval('globalThis') — 0 GB, same
- * trick lib/react.ts uses for the DOM. In a PRODUCTION build that global is
- * undefined, so this script no-ops with an error — the guard IS the boundary.
- *
- * Setting a SourceFile (both Player.sourceFiles and
- * bitNodeOptions.sourceFileOverrides) unlocks canAccessBitNodeFeature(n)
- * immediately — no reset needed.
- *
- * Usage:
- *   run /dev/cheat.js                 # grant everything (money, RAM, skills, karma, all SFs)
- *   run /dev/cheat.js --money 1e12
- *   run /dev/cheat.js --sf 2,3,6,10,13   # only these SourceFiles (level 3)
- *   run /dev/cheat.js --sf none --ram 0  # skip SFs and RAM
- *   run /dev/cheat.js --help
+ * trick lib/react.ts uses for the DOM. Setting a SourceFile (both
+ * Player.sourceFiles and bitNodeOptions.sourceFileOverrides) unlocks
+ * canAccessBitNodeFeature(n) immediately — no reset needed.
  */
 
-const ALL_SF = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 const SKILL_KEYS = ['hacking', 'strength', 'defense', 'dexterity', 'agility', 'charisma', 'intelligence'] as const;
 
 const USAGE = [
-	'DEV-ONLY cheat tool (works only in a dev build — npm run dev in bitburner-src).',
-	'  --money <n>   set money (default 1e15; 0 to skip)',
-	'  --ram <gb>    set home max RAM (default 1048576; 0 to skip)',
-	'  --exp <n>     exp dumped into every skill (default 1e12)',
-	'  --skills      level up all skills (default true; --skills=false to skip)',
-	'  --sf <spec>   "all" (default) | comma list e.g. 2,3,6,10,13 | "none" — granted at level 3',
-	'  --karma <n>   set karma (default -1e6; enables gang creation)',
+	'DEV-ONLY surgical cheat (works only in a dev build of bitburner-src).',
+	'Grants NOTHING unless you name a knob — so you test one gated feature, not a masked one.',
+	'  --sf <list>   unlock SourceFiles, e.g. 4  or  2,3,6   (level from --level)',
+	'  --level <n>   SF level to grant (default 3; SF functions work at 1 with higher RAM)',
+	'  --money <n>   set money exactly (e.g. 1e9)',
+	'  --ram <gb>    set home max RAM exactly, in GB',
+	'  --exp <n>     dump <n> exp into every skill and relevel',
+	'  --karma <n>   set karma exactly (gang unlock threshold is -54000)',
 	'  --help        show this',
-	'Note: sleeves (SF10) may need one DevMenu→SourceFiles→SF10 click to populate',
+	'Note: sleeves (SF10) may need one DevMenu -> SourceFiles -> SF10 click to populate',
 	'      (recalculateNumberOfOwnedSleeves is module-scoped, not reachable from a script).',
 ].join('\n');
 
+/** Parse an ns.flags string value into a finite number, or null if blank/invalid. */
+function asNum(v: unknown): number | null {
+	const s = String(v ?? '').trim();
+	if (s === '') return null;
+	const n = Number(s);
+	return Number.isFinite(n) ? n : null;
+}
+
 export async function main(ns: NS): Promise<void> {
 	const flags = ns.flags([
-		['money', 1e15],
-		['ram', 1048576],
-		['exp', 1e12],
-		['skills', true],
-		['sf', 'all'],
-		['karma', -1e6],
+		['sf', ''],
+		['level', 3],
+		['money', ''],
+		['ram', ''],
+		['exp', ''],
+		['karma', ''],
 		['help', false],
 	]);
 
@@ -63,53 +76,62 @@ export async function main(ns: NS): Promise<void> {
 	const P = eval('globalThis.Bitburner && globalThis.Bitburner.Player') as any;
 	if (!P) {
 		ns.tprint('ERROR: dev cheats unavailable — globalThis.Bitburner.Player is undefined.');
-		ns.tprint('This only works in a DEV build (run the game with `npm run dev` from bitburner-src).');
+		ns.tprint('This only works in a DEV build (run the game with `npm run start:dev` from bitburner-src).');
 		return;
 	}
 
+	const fmt = (n: number) => ns.format.number(n);
 	const changed: string[] = [];
 
-	const money = flags.money as number;
-	if (money > 0) { P.money = money; changed.push(`money=$${ns.formatNumber(money)}`); }
-
-	const ram = flags.ram as number;
-	if (ram > 0) {
-		try { P.getHomeComputer().maxRam = ram; changed.push(`homeRAM=${ns.formatNumber(ram)}GB`); }
-		catch (e) { ns.tprint(`WARN: set RAM failed: ${String(e)}`); }
-	}
-
-	if (flags.skills) {
-		const amt = flags.exp as number;
-		try {
-			for (const k of SKILL_KEYS) P.exp[k] = amt;
-			P.updateSkillLevels();
-			changed.push(`skills(exp=${ns.formatNumber(amt)})`);
-		} catch (e) { ns.tprint(`WARN: set skills failed: ${String(e)}`); }
-	}
-
-	const karma = flags.karma as number;
-	try { P.karma = karma; changed.push(`karma=${ns.formatNumber(karma)}`); }
-	catch (e) { ns.tprint(`WARN: set karma failed: ${String(e)}`); }
-
-	const sfSpec = String(flags.sf);
-	if (sfSpec !== 'none') {
-		const list = sfSpec === 'all'
-			? ALL_SF
+	// ── SourceFiles (the primary purpose: unlock a gated feature) ──────────────
+	const sfSpec = String(flags.sf).trim();
+	if (sfSpec !== '') {
+		const level = (asNum(flags.level) ?? 3) | 0;
+		const list = sfSpec.toLowerCase() === 'all'
+			? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 			: sfSpec.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0);
 		try {
 			for (const n of list) {
-				P.sourceFiles.set(n, 3);
-				P.bitNodeOptions.sourceFileOverrides.set(n, 3);
+				P.sourceFiles.set(n, level);
+				P.bitNodeOptions.sourceFileOverrides.set(n, level);
 			}
 			if (typeof P.reapplyAllSourceFiles === 'function') P.reapplyAllSourceFiles();
-			changed.push(`SF[${list.join(',')}]@3`);
+			if (typeof P.reapplyAllAugmentations === 'function') P.reapplyAllAugmentations();
+			changed.push(`SF[${list.join(',')}]@${level}`);
+			if (list.includes(10)) {
+				ns.tprint('Note: if sleeves stay at 0, click DevMenu → SourceFiles → SF10 once (populates sleeve count).');
+			}
 		} catch (e) { ns.tprint(`WARN: set SourceFiles failed: ${String(e)}`); }
 	}
 
-	try { if (typeof P.reapplyAllAugmentations === 'function') P.reapplyAllAugmentations(); } catch { /* best effort */ }
+	// ── Money ──────────────────────────────────────────────────────────────────
+	const money = asNum(flags.money);
+	if (money !== null) { try { P.money = money; changed.push(`money=$${fmt(money)}`); } catch (e) { ns.tprint(`WARN: money: ${String(e)}`); } }
 
-	ns.tprint('DEV CHEAT applied: ' + (changed.join(' · ') || '(nothing)'));
-	if (sfSpec !== 'none' && (sfSpec === 'all' || sfSpec.split(',').map(s => s.trim()).includes('10'))) {
-		ns.tprint('Note: if sleeves stay at 0, click DevMenu → SourceFiles → SF10 once (populates sleeve count).');
+	// ── Home RAM ─────────────────────────────────────────────────────────────────
+	const ram = asNum(flags.ram);
+	if (ram !== null) {
+		try { P.getHomeComputer().maxRam = ram; changed.push(`homeRAM=${ns.format.ram(ram)}`); }
+		catch (e) { ns.tprint(`WARN: ram: ${String(e)}`); }
 	}
+
+	// ── Skill exp ────────────────────────────────────────────────────────────────
+	const exp = asNum(flags.exp);
+	if (exp !== null) {
+		try {
+			for (const k of SKILL_KEYS) P.exp[k] = exp;
+			P.updateSkillLevels();
+			changed.push(`skills(exp=${fmt(exp)})`);
+		} catch (e) { ns.tprint(`WARN: exp: ${String(e)}`); }
+	}
+
+	// ── Karma ──────────────────────────────────────────────────────────────────────
+	const karma = asNum(flags.karma);
+	if (karma !== null) { try { P.karma = karma; changed.push(`karma=${fmt(karma)}`); } catch (e) { ns.tprint(`WARN: karma: ${String(e)}`); } }
+
+	if (changed.length === 0) {
+		ns.tprint('DEV CHEAT: nothing requested (no-op). Name a knob to grant it.\n' + USAGE);
+		return;
+	}
+	ns.tprint('DEV CHEAT applied (surgical): ' + changed.join(' · '));
 }

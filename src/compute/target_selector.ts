@@ -35,7 +35,7 @@ export function isServerPrepared(
 export function getTargetServers(ns: NS): string[] {
     const allServers = findAllServers(ns);
     const hackLevel = ns.getHackingLevel();
-    const purchased = new Set(ns.getPurchasedServers());
+    const purchased = new Set(ns.cloud.getServerNames());
 
     const targets = allServers.filter(server => {
         if (server === 'home' || purchased.has(server)) return false;
@@ -72,7 +72,7 @@ export class TargetSelector {
     refreshTargets(): void {
         const allServers = findAllServers(this.ns);
         const hackLevel = this.ns.getHackingLevel();
-        const purchased = new Set(this.ns.getPurchasedServers());
+        const purchased = new Set(this.ns.cloud.getServerNames());
 
         this.targetServers = allServers.filter(server => {
             if (server === 'home' || purchased.has(server)) return false;
