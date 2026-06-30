@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import type { BrainSettings } from '../lib/settings';
+import type { PendingDecision, Verdict } from '../lib/decisions';
 
 /**
  * Shared types for the Central Control Console (docs/design/08-control-console.md).
@@ -33,14 +34,16 @@ export interface ConsoleState {
 	settings: BrainSettings;
 	pendingAugs: number;
 	monitor: MonitorSnapshot;
-	// widened further in Step D+ : decisions[], notifications[]
+	decisions: PendingDecision[];   // judgment calls awaiting a verdict (Step D)
+	// widened further later : notifications[]
 }
 
 /** Actions a panel can request. The loop drains the queue and performs the ns.* work. */
 export type Intent =
 	| { kind: 'setSettings'; settings: BrainSettings }
 	| { kind: 'buyAugs' }
-	| { kind: 'reset' };
+	| { kind: 'reset' }
+	| { kind: 'decide'; id: string; verdict: Verdict };
 
 export type Dispatch = (intent: Intent) => void;
 

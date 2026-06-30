@@ -30,6 +30,13 @@ export const PORT_STOCK = 10;
 export const PORT_AUGS  = 11;
 /** Raw terminal-command strings → game_agent pops and injects via cross/launcher. */
 export const PORT_LAUNCHER = 12;
+/**
+ * Human verdicts on surfaced judgment calls (Approve/Deny/Defer).
+ * The control console AND the MCP agent push DecisionReply JSON here; the
+ * producer (player_sequencer) pops and applies. See lib/decisions.ts.
+ * NOTE: distinct from PORT_DECISION (port 4), which is a one-way transition LOG.
+ */
+export const PORT_DECISION_REPLY = 13;
 
 // ── Sentinel returned by readPort/peek when a port is empty ─────────────────
 const NULL_DATA = 'NULL PORT DATA';

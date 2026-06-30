@@ -5,9 +5,11 @@ import { SCRIPT_PATHS } from '../lib/config';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
 import { PORT_AUGS, PORT_PHASE, peekPort } from '../lib/ports';
+import { loadPending, pushReply } from '../lib/decisions';
 import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot } from './console_types';
 import { configPanel } from './panels/config_panel';
 import { monitorPanel } from './panels/monitor_panel';
+import { decisionsPanel } from './panels/decisions_panel';
 
 /**
  * Central Control Console — the brain's in-game UI surface.
@@ -30,7 +32,7 @@ import { monitorPanel } from './panels/monitor_panel';
  */
 
 // ── Registered panels (design/08 §4 — append here to add a feature) ───────────
-const PANELS: Panel[] = [monitorPanel, configPanel];
+const PANELS: Panel[] = [monitorPanel, decisionsPanel, configPanel];
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -280,6 +282,7 @@ export async function main(ns: NS): Promise<void> {
 		settings: current,
 		pendingAugs: parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10),
 		monitor: gatherMonitor(ns),
+		decisions: loadPending(ns),
 	};
 
 	// Self-owned floating window host on document.body.
@@ -322,6 +325,10 @@ export async function main(ns: NS): Promise<void> {
 					runBuyAugs(ns);
 				} else if (intent.kind === 'reset') {
 					await runReset(ns); // may reset the game; loop ends there
+				} else if (intent.kind === 'decide') {
+					// Responder only: forward the verdict to the producer (sequencer),
+					// which owns applying it + clearing the pending entry.
+					pushReply(ns, { id: intent.id, verdict: intent.verdict });
 				}
 			}
 		}
@@ -330,7 +337,7 @@ export async function main(ns: NS): Promise<void> {
 		ensureGear(gearHostRef);
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
 		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
-			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns) },
+			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: loadPending(ns) },
 		}));
 
 		await ns.sleep(current.tickIntervalMs);

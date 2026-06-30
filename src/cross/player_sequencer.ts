@@ -4,6 +4,7 @@ import { DesignPhase, PHASE_RESET_MIN_AUGS, SCRIPT_PATHS } from '../lib/config';
 import { loadSettings } from '../lib/settings';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
+import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 
 /**
  * Player Sequencer — autonomous Thread-P brain daemon.
@@ -39,6 +40,12 @@ const PORT_OPENER_FILES = [
 
 /** Re-check SF4 every N ticks if not found (60 × 5 s ≈ 5 min at default cadence). */
 const SF4_RECHECK_INTERVAL = 60;
+
+/** How long a "Defer" verdict suppresses the aug/reset decision (12 × 5 s ≈ 1 min). */
+const DECISION_DEFER_TICKS = 12;
+
+/** Stable id for the (single) aug-purchase/reset judgment call. */
+const AUG_DECISION_ID = 'augReset';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -85,6 +92,10 @@ export async function main(ns: NS): Promise<void> {
 	let paLastOpenerCount = -1;   // opener count captured at last launch
 	let paRetryCount      = 0;    // consecutive runs with no new openers
 
+	// ── Aug/reset decision suppression (Step D — DecisionsPanel) ──────────────
+	let augDeniedAtAugs   = -1;   // deny → don't re-surface until pendingAugs exceeds this
+	let augDeferUntilTick = 0;    // defer → don't re-surface until this tick
+
 	let tick = 0;
 
 	while (true) {
@@ -101,6 +112,28 @@ export async function main(ns: NS): Promise<void> {
 			if (sf4) ns.print('SF4 now detected — trusted actions enabled');
 		}
 
+		// ── Apply human/MCP verdicts on the aug/reset decision ────────────────
+		// Responders (control console, MCP agent) push to PORT_DECISION_REPLY; we
+		// own applying the verdict and clearing the pending entry (lib/decisions.ts).
+		for (const reply of drainReplies(ns)) {
+			if (reply.id !== AUG_DECISION_ID) continue;
+			removePending(ns, AUG_DECISION_ID);
+			if (reply.verdict === 'approve') {
+				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
+					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--purchase');
+					ns.print(pid > 0
+						? `DECISION approved — aug_planner --purchase launched (pid ${pid})`
+						: 'WARN: aug_planner --purchase failed to start on approval');
+				}
+			} else if (reply.verdict === 'deny') {
+				augDeniedAtAugs = pendingAugs;
+				ns.print(`DECISION denied — aug/reset suppressed until augs exceed ${pendingAugs}`);
+			} else if (reply.verdict === 'defer') {
+				augDeferUntilTick = tick + DECISION_DEFER_TICKS;
+				ns.print(`DECISION deferred — re-surfacing in ${DECISION_DEFER_TICKS} ticks`);
+			}
+		}
+
 		// ── RESET handling (judgment item) ────────────────────────────────────
 		//
 		// Trigger: phase == RESET (from phase_detector) OR pendingAugs crosses
@@ -108,7 +141,9 @@ export async function main(ns: NS): Promise<void> {
 		// Default: notify-only (autoBuyAugs+autoReset both OFF).
 		if (phase === DesignPhase.RESET || pendingAugs >= PHASE_RESET_MIN_AUGS) {
 			if (settings.autoBuyAugs && settings.autoReset) {
-				// Full auto-reset — intentionally gated behind BOTH switches
+				// Full auto-reset — intentionally gated behind BOTH switches.
+				// Clear any decision surfaced before the switches were flipped to auto.
+				removePending(ns, AUG_DECISION_ID);
 				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
 					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--purchase');
 					ns.print(pid > 0
@@ -116,16 +151,37 @@ export async function main(ns: NS): Promise<void> {
 						: 'WARN: aug_planner --purchase failed to start');
 				}
 			} else {
-				notify(
-					ns,
-					`${pendingAugs} augmentations affordable — buy and reset?`,
-					'run /player/aug_planner.js --purchase',
-					{ pendingAugs, money: player.money },
-				);
+				// Surface as a pending decision (Approve/Deny/Defer). The control
+				// console and the MCP agent both read status/decisions_pending.json
+				// and reply via PORT_DECISION_REPLY (drained above). Suppressed while
+				// a prior Deny (until more augs) or Defer (cooldown) is in effect.
+				const suppressed = pendingAugs <= augDeniedAtAugs || tick < augDeferUntilTick;
+				if (!suppressed) {
+					const added = upsertPending(ns, {
+						id: AUG_DECISION_ID,
+						kind: 'augReset',
+						prompt: `${pendingAugs} augmentations affordable — buy and reset?`,
+						command: 'run /player/aug_planner.js --purchase',
+						context: { pendingAugs, money: player.money },
+						ts: Date.now(),
+					});
+					// Ping the notification feed once, when first surfaced (not every tick).
+					if (added) {
+						notify(
+							ns,
+							`${pendingAugs} augmentations affordable — buy and reset?`,
+							'run /player/aug_planner.js --purchase',
+							{ pendingAugs, money: player.money },
+						);
+					}
+				}
 			}
 			await ns.sleep(settings.tickIntervalMs);
 			continue;  // skip trusted-action block while reset is pending
 		}
+
+		// Reset condition not active — drop any stale aug/reset decision.
+		removePending(ns, AUG_DECISION_ID);
 
 		// ── Pre-SF4: idle + notify once ───────────────────────────────────────
 		if (!sf4) {
