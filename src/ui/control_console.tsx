@@ -264,6 +264,16 @@ async function runReset(ns: NS): Promise<void> {
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog('ALL');
 
+	// Singleton guard: if another instance is already running (same filename,
+	// different pid) bail before touching the DOM — a second toolbar gear / body
+	// portal would double-inject and fight over the same per-PID event names.
+	const self = ns.getScriptName();
+	const existing = ns.ps().find(p => p.filename === self && p.pid !== ns.pid);
+	if (existing) {
+		ns.tprint(`Control console already running (pid ${existing.pid}); exiting.`);
+		return;
+	}
+
 	const eventName = `bb-console-${ns.pid}`;
 	let current = loadSettings(ns);
 	const initial: ConsoleState = {
