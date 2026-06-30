@@ -12,7 +12,7 @@ import { SUBSYSTEM_IDS } from '../lib/manager_registry';
 import { goTo, currentPage, GamePage } from '../lib/navigator';
 import type { GamePageValue } from '../lib/navigator';
 import type { Notification } from '../cross/notification';
-import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot, UiState } from './console_types';
+import type { ConsoleState, Intent, Dispatch, Panel, MonitorSnapshot, MonitorSample, UiState } from './console_types';
 import { configPanel } from './panels/config_panel';
 import { monitorPanel } from './panels/monitor_panel';
 import { decisionsPanel } from './panels/decisions_panel';
@@ -64,6 +64,13 @@ const TOGGLE_EVENT = 'bb-brain-panel-toggle';
 const CONSOLE_TICK_MS = 200;
 /** Refresh slow-changing data (decisions/logs/player) every Nth tick (~1 Hz). */
 const SLOW_REFRESH_EVERY = 5;
+/** Rolling ChartsPanel history depth (~1 sample/s → ≈3 min at SLOW_REFRESH_EVERY). */
+const HISTORY_CAP = 180;
+
+/** Build one chart sample from a MonitorSnapshot. */
+function sampleFrom(m: MonitorSnapshot): MonitorSample {
+	return { ts: Date.now(), money: m.money, income: m.incomePerSec, ramUsed: m.ramUsed, ramMax: m.ramMax };
+}
 
 /**
  * Toolbar button icon. MUI isn't exposed on window (only React/ReactDOM are), so
@@ -461,6 +468,7 @@ export async function main(ns: NS): Promise<void> {
 		currentPage: currentPage() ?? '',
 		player: loadPlayerState(ns),
 		subsystems: loadAllSubsystems(ns, SUBSYSTEM_IDS),
+		history: [sampleFrom(gatherMonitor(ns))],
 	};
 	const initialUi = loadUiState(ns);
 
@@ -496,6 +504,7 @@ export async function main(ns: NS): Promise<void> {
 	let slowLogs = initial.logs;
 	let slowPlayer = initial.player;
 	let slowSubsystems = initial.subsystems;
+	const history: MonitorSample[] = [...initial.history];
 
 	while (true) {
 		// 1. Drain queued intents BEFORE publishing state, so the event we dispatch
@@ -535,15 +544,18 @@ export async function main(ns: NS): Promise<void> {
 		// Slow-changing data (file reads) refresh ~1 Hz; fast data (RAM/income,
 		// nav highlight, pending-augs) every tick so metrics and the active-page
 		// highlight stay smooth without reading three files at the loop rate.
+		const monitor = gatherMonitor(ns);
 		if (tick % SLOW_REFRESH_EVERY === 0) {
 			slowDecisions  = loadPending(ns);
 			slowLogs       = gatherLogs(ns);
 			slowPlayer     = loadPlayerState(ns);
 			slowSubsystems = loadAllSubsystems(ns, SUBSYSTEM_IDS);
+			history.push(sampleFrom(monitor));
+			if (history.length > HISTORY_CAP) history.shift();
 		}
 		const pendingAugs = parseInt(peekPort(ns, PORT_AUGS) ?? '0', 10);
 		domWindow.dispatchEvent(new CustomEvent<ConsoleState>(eventName, {
-			detail: { settings: current, pendingAugs, monitor: gatherMonitor(ns), decisions: slowDecisions, logs: slowLogs, currentPage: currentPage() ?? '', player: slowPlayer, subsystems: slowSubsystems },
+			detail: { settings: current, pendingAugs, monitor, decisions: slowDecisions, logs: slowLogs, currentPage: currentPage() ?? '', player: slowPlayer, subsystems: slowSubsystems, history: [...history] },
 		}));
 
 		tick++;

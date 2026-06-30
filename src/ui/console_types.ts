@@ -32,6 +32,20 @@ export interface MonitorSnapshot {
 	scriptCount: number;   // running scripts on home
 }
 
+/**
+ * One time-series sample for the ChartsPanel (design/11). The loop appends one
+ * per slow-tick to a rolling in-memory buffer it ships in ConsoleState.history —
+ * a panel only renders while its tab is active, so the buffer must live in the
+ * loop, not the panel.
+ */
+export interface MonitorSample {
+	ts:       number;   // ms epoch
+	money:    number;   // home money ($)
+	income:   number;   // script income ($/s)
+	ramUsed:  number;   // home used RAM (GB)
+	ramMax:   number;   // home max RAM (GB)
+}
+
 /** Read-only snapshot the NS loop dispatches to the React tree each tick. */
 export interface ConsoleState {
 	settings: BrainSettings;
@@ -42,6 +56,7 @@ export interface ConsoleState {
 	currentPage: string;               // QuickNavPanel   (Wave 1-A) — Navigator.currentPage() or ''
 	player: PlayerSnapshot;            // FactionsPanel   (Wave 1-C) — published by the sequencer
 	subsystems: SubsystemStatus[];     // SubsystemsPanel (design/11) — one per registry manager
+	history: MonitorSample[];          // ChartsPanel     (design/11) — rolling time-series, oldest-first
 }
 
 /**
