@@ -114,7 +114,12 @@ Each manager agent: **study `example_code_dump/alainbryden-<x>.js` + `research_r
 ## §5 Wave 2 — integrate + verify (me, solo)
 Integrate disjoint files (copy panels/managers; the sequencer + seam already merged in Wave 0). Add the new panels to the tab bar. Full verify (`tsc`, `node --check`). Then the SINGLE Tier-2 pass — validate each subsystem whose SF this save owns; the rest are confirmed to no-op cleanly (available:false) and are validated later when unlocked.
 
-## §6 Open decisions (ratify before building)
-1. **Corporation (Agent F):** include now or defer? It's the largest, has **no reference impl**, and is often unavailable/not-worth-it early. Recommend **defer** to a focused follow-up round; scaffold a stub manager (publishes available + a "corp automation not yet implemented" headline) so the registry/console slot exists.
-2. **SF-gated build scope:** build **all** managers now (validate as SFs unlock) — recommended, since toggles default OFF and managers no-op when unavailable — vs build only what this save can validate.
-3. **Default ON/OFF:** all new toggles default **OFF** (safe; user opts in per subsystem) — recommended — except `autoHacknet`/`autoStock` which already run (default ON to preserve current behavior).
+## §6 Decisions (LOCKED 2026-06-30)
+1. **Corporation (Agent F): DEFER + stub.** Build only a stub corp manager (publishes `available` + a "corp automation not yet implemented" headline) so the registry/console slot exists; real corp automation is a focused follow-up round.
+2. **SF-gated build scope: BUILD ALL now.** Toggles default OFF and each manager no-ops cleanly when its SF is absent, so it's safe to ship them all; validate per-subsystem in dev (§7).
+3. **Default ON/OFF:** all new toggles default **OFF** (user opts in per subsystem); `autoHacknet`/`autoStock` default **ON** (preserve current always-running behavior).
+
+## §7 Validation via dev cheats (user 2026-06-30)
+The SF-gating caveat is **removed**: the game has a Dev tab (and we can build our own dev-only cheat script) to grant money / RAM / skills / levels / **SourceFiles** / BitNode in development. So Wave 2 Tier-2 can validate **every** subsystem manager in dev by granting the relevant SF, not just the ones this save happens to own.
+
+**Boundary (hard):** cheating is **dev-only**. The autonomous gameplay system keeps its capability boundary intact; the cheat tool is a separate dev aid, clearly segregated (own dir, never imported by production, never run in real play). Recon of `../bitburner-src` (how the Dev menu mutates `Player`, runtime reachability, SourceFile granting) is in progress; the cheat tool is built/confirmed before the Wave-2 validation pass. This is an **enabler**, parallel to the build — it does not change the §3 seam.
