@@ -1,6 +1,6 @@
 # Design 09 — Parallel Build Plan (console v1 completion)
 
-**Status:** PLAN (awaiting scope ratification 2026-06-30). Doc-first so it survives compaction; post-compaction this is the build spec.
+**Status:** BUILT 2026-06-30. Wave 0 (`2ac43ef`), Wave 1 (`e6fbb8d`), Wave 2 (`1ce0ed0`). `tsc --noEmit` + `node --check` clean across all bundles; Tier-2 (user-driven) is the remaining gate. **Build note:** the five worktrees branched from a pre-Step-D base (`7ce9d9e`), so panels (A/B/C) were integrated by copying the file content onto the Wave-0 seam, and the existing-file edits (D sequencer, E game_agent) were re-applied by hand rather than git-merged (a naive merge would have reverted Step D + Wave 0). Lesson: worktree isolation does not inherit an in-session commit as its base, and worktrees lack `node_modules` so agent-side `tsc` reports phantom `@ns` errors — verify in the main tree.
 
 **Goal (user 2026-06-30):** finish the console + judgment layer in ONE session via concurrent subagents in git worktrees. Build *everything*, then debug — not build-while-debug. Waves are allowed; one session is the constraint.
 
