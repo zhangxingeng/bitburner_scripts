@@ -1,15 +1,21 @@
 import type { NS } from '@ns';
+import {
+    findButton,
+    findAnyButton,
+    clickEl,
+    clickButton,
+    navToPage,
+    visitLoc,
+    terminalCmd,
+} from './lib/dom';
 
 /**
- * BRAIN — single-entry autonomous game runner. Replaces bootstrap.ts +
- * phase_detector.ts + player_sequencer.ts + program_acquirer.ts + hacknet_manager.ts
- * + early_prepper.ts + ui_actions.ts with ONE script.
+ * BRAIN — single-entry autonomous game runner.
  *
  * Launch:  run /brain.js
  *
- * All DOM functionality is INLINED — no imports from lib/ to avoid the
- * RAM analyzer counting transitive ns.* references from imported modules.
- * DOM access uses eval('document') for 0 GB static RAM.
+ * DOM utilities imported from lib/dom.ts (zero ns.* cost).  Function names
+ * deliberately avoid ns.* API collisions (see lib/dom.ts for details).
  *
  * Priority loop:
  *   1. EARN  — pick best target, prep + hack; manage hacknet
@@ -32,111 +38,6 @@ const OPENER_COST: Record<string, number> = {
 };
 const TECH_VENDORS = ['Alpha Enterprises', 'ECorp', 'NetLink Technologies', 'Omega Software', 'CompuTek'];
 const UNIVERSITIES = ['Rothman University', 'Summit University', 'ZB Institute of Technology'];
-
-// ── Inlined DOM utilities (0 GB — eval hides document from RAM analyzer) ────────
-
-function doc(): Document { return eval('document') as Document; }
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function win(): Window & typeof globalThis { return eval('window') as Window & typeof globalThis; }
-
-function findButton(text: string): HTMLElement | null {
-    try {
-        const d = doc();
-        for (const btn of Array.from(d.querySelectorAll('button'))) {
-            const t = (btn.textContent ?? '').trim();
-            if (!t.toLowerCase().includes(text.toLowerCase())) continue;
-            if (t.length < 5) continue;
-            if ((btn as HTMLButtonElement).disabled) continue;
-            return btn as HTMLElement;
-        }
-        return null;
-    } catch { return null; }
-}
-
-function clickBtn(btn: HTMLElement): void { try { btn.click(); } catch { /* nop */ } }
-
-function findAndClick(text: string): boolean {
-    const b = findButton(text);
-    if (!b) return false;
-    clickBtn(b);
-    return true;
-}
-
-async function waitForBtn(ns: NS, text: string, ms = 2000): Promise<HTMLElement | null> {
-    const dl = Date.now() + ms;
-    while (Date.now() < dl) {
-        const b = findButton(text);
-        if (b) return b;
-        await ns.sleep(100);
-    }
-    return null;
-}
-
-/** Sidebar page navigation — inlined from navigator.ts (0 GB). */
-function navToPage(pageName: string): boolean {
-    try {
-        const d = doc();
-        // Primary: find clickPage via React fiber (same as navigator.ts)
-        const drawer = d.querySelector('.MuiDrawer-root');
-        if (drawer) {
-            for (const k of Object.keys(drawer)) {
-                if (!k.startsWith('__reactFiber$')) continue;
-                const root = (drawer as unknown as Record<string, { child?: unknown; sibling?: unknown; memoizedProps?: { clickPage?: unknown } }>)[k];
-                const stack: Array<{ child?: unknown; sibling?: unknown; memoizedProps?: { clickPage?: unknown } }> = [];
-                if ((root as { child?: unknown })?.child) stack.push((root as { child?: unknown }).child as typeof stack[0]);
-                let guard = 0;
-                while (stack.length && guard++ < 5000) {
-                    const f = stack.pop()!;
-                    if (typeof f.memoizedProps?.clickPage === 'function') {
-                        (f.memoizedProps.clickPage as (p: string) => void)(pageName);
-                        return true;
-                    }
-                    if ((f as { child?: unknown }).child) stack.push((f as { child?: unknown }).child as typeof stack[0]);
-                    if ((f as { sibling?: unknown }).sibling) stack.push((f as { sibling?: unknown }).sibling as typeof stack[0]);
-                }
-                break;
-            }
-        }
-        // Fallback: click sidebar ListItem
-        const items = d.querySelectorAll('.MuiDrawer-root .MuiListItem-root');
-        for (const item of Array.from(items)) {
-            const label = item.querySelector('.MuiListItemText-root');
-            if ((label?.textContent ?? '').trim() === pageName) {
-                (item as HTMLElement).click();
-                return true;
-            }
-        }
-        return false;
-    } catch { return false; }
-}
-
-/** Navigate to City page, then click a location button. */
-function goToLocation(locName: string): boolean {
-    if (!navToPage('City')) return false;
-    return findAndClick(locName);
-}
-
-/** Inject a terminal command (inlined from launcher.ts). */
-function terminalCmd(command: string): boolean {
-    try {
-        const d = doc();
-        const w = win();
-        const input = d.getElementById('terminal-input') as HTMLInputElement | null;
-        if (!input) {
-            // Navigate to Terminal and retry next tick
-            navToPage('Terminal');
-            return false;
-        }
-        const setNativeValue = Object.getOwnPropertyDescriptor(
-            w.HTMLInputElement.prototype, 'value',
-        )?.set;
-        if (!setNativeValue) return false;
-        setNativeValue.call(input, command);
-        input.dispatchEvent(new w.Event('input', { bubbles: true }));
-        input.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }));
-        return true;
-    } catch { return false; }
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
@@ -254,6 +155,18 @@ function nukeAll(ns: NS): number {
     return rooted;
 }
 
+/** Wait for a button to appear, using ns.sleep for polling. */
+async function waitForBtn(ns: NS, text: string, ms = 2000): Promise<HTMLElement | null> {
+    const dl = Date.now() + ms;
+    while (Date.now() < dl) {
+        const b = findButton(text);
+        if (b) return b;
+        if (findAnyButton(text)) return null;
+        await ns.sleep(100);
+    }
+    return null;
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export async function main(ns: NS): Promise<void> {
@@ -296,9 +209,9 @@ export async function main(ns: NS): Promise<void> {
             if (!tor && money >= TOR_COST) {
                 ns.print('[brain] Buying TOR...');
                 for (const v of TECH_VENDORS) {
-                    if (!goToLocation(v)) continue;
+                    if (!visitLoc(v)) continue;
                     const btn = await waitForBtn(ns, 'Purchase TOR router', 2000);
-                    if (btn) { clickBtn(btn); ns.print('[brain] TOR purchased'); break; }
+                    if (btn) { clickEl(btn); ns.print('[brain] TOR purchased'); break; }
                 }
             }
 
@@ -314,18 +227,18 @@ export async function main(ns: NS): Promise<void> {
             if (homeRam < 64 && tick % 30 === 0) {
                 ns.print(`[brain] Upgrading RAM (${homeRam}GB)...`);
                 for (const v of TECH_VENDORS) {
-                    if (!goToLocation(v)) continue;
+                    if (!visitLoc(v)) continue;
                     const btn = await waitForBtn(ns, "Upgrade 'home' RAM", 2000);
-                    if (btn) { clickBtn(btn); ns.print('[brain] RAM upgraded'); break; }
+                    if (btn) { clickEl(btn); ns.print('[brain] RAM upgraded'); break; }
                 }
             }
 
             // ── LEARN — free CS course ────────────────────────────────────────
             if (hackLvl < 100 && tick % 50 === 0) {
                 for (const uni of UNIVERSITIES) {
-                    if (!goToLocation(uni)) continue;
+                    if (!visitLoc(uni)) continue;
                     const btn = await waitForBtn(ns, 'Computer Science', 1500);
-                    if (btn) { clickBtn(btn); break; }
+                    if (btn) { clickEl(btn); break; }
                 }
             }
 
