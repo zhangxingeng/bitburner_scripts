@@ -20,8 +20,8 @@ import { domDocument } from './react';
  * game's own click handlers, the same action a human takes by clicking. We never
  * read save state / RNG / game objects through the fiber; we only use it to click.
  *
- * Zero-RAM: pure eval('document') DOM access (via ./react) + no ns.* — costs
- * 0 GB and is importable into any hot path (launcher) or UI script.
+ * Zero-RAM: DOM access via ../lib/react (keywords split) + zero ns.* calls
+ * — costs 0 GB transitive and is import-safe into any hot path.
  */
 
 // ── Page constants (mirrored from bitburner-src/src/ui/Enums.ts; value string === sidebar text) ──

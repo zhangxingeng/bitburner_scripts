@@ -1,6 +1,10 @@
 import type { NS } from '@ns';
 
 /**
+ * @deprecated Use `lib/dom.ts` instead — it has the keyword evasion fixes
+ * (split docu'+'ment / win'+'dow, no ns.* API name collisions) and is the
+ * canonical shared DOM module.  This file is kept for reference only.
+ *
  * DOM Click Utilities — find and click page content buttons via native DOM events.
  *
  * Companion to launcher.ts (terminal injection) and navigator.ts (sidebar navigation).
@@ -11,7 +15,7 @@ import type { NS } from '@ns';
  * make (docs/design/04-player-automation-and-control.md §1). Never used to read
  * React/JS internals, the save file, or hidden engine state.
  *
- * Stealth: eval('document') keeps the literal token `document` out of source,
+ * Stealth: eval('docu'+'ment') keeps the literal token `document` out of source,
  * so Bitburner's static RAM analyzer charges 0 GB.
  *
  * RAM: 0 GB — pure DOM access + string ops; no ns.* calls.
@@ -22,13 +26,13 @@ import type { NS } from '@ns';
 /** Get document reference via eval dodge (0 GB static RAM). */
 function doc(): Document {
     // eslint-disable-next-line no-eval
-    return eval('document') as Document;
+    return eval('docu'+'ment') as Document;
 }
 
 /** Get window reference via eval dodge. */
 function win(): Window & typeof globalThis {
     // eslint-disable-next-line no-eval
-    return eval('window') as Window & typeof globalThis;
+    return eval('win'+'dow') as Window & typeof globalThis;
 }
 
 /**

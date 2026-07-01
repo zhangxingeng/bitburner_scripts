@@ -8,8 +8,8 @@ import { ensureTerminal } from '../lib/navigator';
  * (see docs/design/04-player-automation-and-control.md §3)
  *
  * Implements Mechanism 3a: stealth-DOM terminal-command injection.
- * Stealth: `eval("document")` keeps the literal token `document` out of the
- * source, so Bitburner's static RAM analyzer never charges the 25 GB penalty.
+ * Stealth: `eval("docu"+"ment")` splits the literal keyword so Bitburner's
+ * static RAM analyzer never charges the 25 GB penalty.
  *
  * Constraint: DOM access is UI-interfacing ONLY — clicks / keystrokes a human
  * could make, and reading text that is visibly rendered on screen (§1 ruling).
@@ -19,8 +19,8 @@ import { ensureTerminal } from '../lib/navigator';
  *   Base script:  1.6 GB
  *   ns.exec:     ~1.3 GB  (statically referenced; pays even if never called)
  *   ns.print/tprint/disableLog: 0 GB
- *   eval-hidden document:       0 GB  (static analyzer never sees the token)
- *   readScreen():               0 GB  (eval-hidden document; pure string ops)
+ *   eval-hidden DOM:            0 GB  (static analyzer never sees the token)
+ *   readScreen():               0 GB  (eval-hidden DOM; pure string ops)
  *   ─────────────────────────────────
  *   Total:       ~2.9 GB
  *
@@ -49,9 +49,9 @@ export function runTerminalCommand(command: string): boolean {
     // Stealth DOM access — eval hides the literal tokens from the static analyzer.
     // ONLY for UI interfacing; must never read/mutate internal game state.
     // eslint-disable-next-line no-eval
-    const doc = eval('document') as Document;
+    const doc = eval('docu'+'ment') as Document;
     // eslint-disable-next-line no-eval
-    const win = eval('window') as Window & typeof globalThis;
+    const win = eval('win'+'dow') as Window & typeof globalThis;
 
     const input = doc.getElementById('terminal-input') as HTMLInputElement | null;
 
@@ -110,7 +110,7 @@ export function runTerminalCommand(command: string): boolean {
  */
 export async function runTerminalCommandEnsured(ns: NS, command: string, timeoutMs = 800): Promise<boolean> {
     // eslint-disable-next-line no-eval
-    const doc = eval('document') as Document;
+    const doc = eval('docu'+'ment') as Document;
     if (!doc.getElementById('terminal-input')) {
         ensureTerminal(); // kick the navigation (async React state update)
         const deadline = Date.now() + timeoutMs;
@@ -132,9 +132,8 @@ export async function runTerminalCommandEnsured(ns: NS, command: string, timeout
  * exactly what a human eyeballs.  It does NOT read React fibers, JS object
  * state, the save file, or any non-rendered internal data (§1 ruling).
  *
- * Stealth: same `eval("document")` dodge as `runTerminalCommand` — the literal
- * token `document` never appears in source, so the static RAM analyzer charges
- * 0 GB.  This function itself adds 0 GB (pure DOM read + string ops; no ns.*
+ * Stealth: same `eval("docu"+"ment")` dodge as `runTerminalCommand` — the literal
+ * keyword never appears in source, so the static RAM analyzer charges 0 GB.  This function itself adds 0 GB (pure DOM read + string ops; no ns.*
  * calls).
  *
  * @param maxChars  Maximum tail length to return (default 4000).  The terminal
@@ -154,7 +153,7 @@ export function readScreen(maxChars = 4000): string {
         // Stealth DOM access — eval hides the literal token from the static analyzer.
         // ONLY a UI read of rendered/visible text; must never access internal state.
         // eslint-disable-next-line no-eval
-        const doc = eval('document') as Document;
+        const doc = eval('docu'+'ment') as Document;
 
         const terminal = doc.getElementById('terminal');
 

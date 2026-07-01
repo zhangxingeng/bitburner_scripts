@@ -209,7 +209,7 @@ async function liquidateAllPositions(ns: NS): Promise<void> {
  * Initialize the HUD display element for stock portfolio value.
  */
 function initializeHud(): HudElement {
-    const d = eval('document');
+    const d = eval('docu'+'ment');
     let htmlDisplay = d.getElementById('stock-display-1') as HudElement;
     if (htmlDisplay !== null) return htmlDisplay;
 

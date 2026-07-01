@@ -99,6 +99,32 @@ export function clickButton(text: string): boolean {
     return b ? clickEl(b) : false;
 }
 
+/**
+ * Click a location on the City map.  Handles both rendering modes:
+ *   ASCIICity  — locations are <span aria-label="Alpha Enterprises">T</span>
+ *   ListCity   — locations are <Button>Alpha Enterprises</Button>
+ *
+ * Tries <button> text match first (ListCity / inside a location page),
+ * then <span aria-label> match (ASCII city map).
+ */
+export function clickLocation(locName: string): boolean {
+    // 1. Button mode (ListCity or regular page buttons)
+    const btn = findButton(locName);
+    if (btn) return clickEl(btn);
+
+    // 2. ASCII map mode — <span aria-label="locName">
+    try {
+        const d = doc();
+        const spans = d.querySelectorAll('span[aria-label]');
+        for (const span of Array.from(spans)) {
+            if ((span.getAttribute('aria-label') ?? '').trim() === locName) {
+                return clickEl(span as HTMLElement);
+            }
+        }
+    } catch { /* fall through */ }
+    return false;
+}
+
 // ── Sidebar navigation ─────────────────────────────────────────────────────────
 
 /**
@@ -148,12 +174,12 @@ export function navToPage(pageName: string): boolean {
     }
 }
 
-/** Navigate to City page, then click a location button within the city map. */
-/** Navigate to City, then click a location.  Deliberately NOT named
- *  `goToLocation` — that collides with ns.singularity.goToLocation (80 GB). */
+/** visitLoc: navigate City then click a location.  Handles ASCII map (<span>)
+ *  and ListCity (<button>) modes.  NOT named goToLocation — collides with
+ *  ns.singularity.goToLocation (80 GB). */
 export function visitLoc(locName: string): boolean {
     if (!navToPage('City')) return false;
-    return clickButton(locName);
+    return clickLocation(locName);
 }
 
 // ── Terminal injection ─────────────────────────────────────────────────────────
