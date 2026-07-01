@@ -26,7 +26,7 @@ import { PLAYER_MANAGERS } from '../lib/manager_registry';
  *   Estimated total: ~3.3 GB.
  *
  * Launch:  ns.exec('/cross/player_sequencer.js', 'home', 1)
- *          (auto-launched by bootstrap.ts at EARLY phase when home ≥ brainRamFloorGb)
+ *          (auto-launched by brain.ts at EARLY phase when home ≥ brainRamFloorGb)
  */
 
 // ── Constants ─────────────────────────────────────────────────────────────────

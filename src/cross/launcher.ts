@@ -25,7 +25,7 @@ import { ensureTerminal } from '../lib/navigator';
  *   Total:       ~2.9 GB
  *
  * Launch: run /cross/launcher.js <terminal-command-to-inject>
- * Example: run /cross/launcher.js run /bootstrap.js
+ * Example: run /cross/launcher.js run /brain.js
  */
 
 // ── Terminal Injection (Mechanism 3a) ──────────────────────────────────────────
@@ -200,7 +200,7 @@ export async function main(ns: NS): Promise<void> {
 
     if (ns.args.length === 0) {
         ns.tprint('Usage: run /cross/launcher.js <terminal-command>');
-        ns.tprint('Example: run /cross/launcher.js run /bootstrap.js');
+        ns.tprint('Example: run /cross/launcher.js run /brain.js');
         ns.tprint('Injects the given command into the terminal as if a human typed it.');
         return;
     }

@@ -116,14 +116,24 @@
 
 ### 1.6 Server Purchasing
 
-| Function | RAM Cost | Description |
-|---|---|---|
-| `getPurchasedServerCost(ram)` | 0.25 GB | Cost for a purchased server (use this, not formula). |
-| `purchaseServer(name, ram)` | 2.25 GB | Purchase a new server. Returns hostname or "". |
-| `deleteServer(name)` | 2.25 GB | Delete a purchased server. |
-| `getPurchasedServers()` | 2.25 GB | List all purchased servers. |
-| `getPurchasedServerLimit()` | 0.05 GB | Max purchasable servers (default 25). |
-| `getPurchasedServerMaxRam()` | 0.05 GB | Max RAM for purchased servers (default 2^20 = 1,048,576 GB). |
+**Updated 2026-07-01:** these moved to the `ns.cloud.*` namespace in game v3.0.0 — the flat
+top-level names below no longer exist and calling them throws. This table was stale (still
+listing the pre-3.0.0 names) until this fix; see `docs/design/13-test-harness-and-script-audit.md`
+for the incident where this caused real "scripts don't run" bugs across 14 call sites in the
+compute hot paths (fixed in commit `58e135a`). Verified against
+`../bitburner-src/src/NetscriptFunctions/Cloud.ts` and `RamCostGenerator.ts`'s `cloud` table.
+
+| Old flat name (v2, REMOVED) | Current name | RAM Cost | Description |
+|---|---|---|---|
+| `getPurchasedServerCost(ram)` | `ns.cloud.getServerCost(ram)` | 0.25 GB | Cost for a purchased server. |
+| `purchaseServer(name, ram)` | `ns.cloud.purchaseServer(name, ram)` | 2.25 GB | Purchase a new server. Returns hostname or "". |
+| `deleteServer(name)` | `ns.cloud.deleteServer(name)` | 2.25 GB | Delete a purchased server. |
+| `getPurchasedServers()` | `ns.cloud.getServerNames()` | 1.05 GB | List all purchased servers (cost also changed: was 2.25 GB). |
+| `getPurchasedServerLimit()` | `ns.cloud.getServerLimit()` | 0.05 GB | Max purchasable servers (default 25). |
+| `getPurchasedServerMaxRam()` | `ns.cloud.getRamLimit()` | 0.05 GB | Max RAM for purchased servers. |
+| *(new in v3.0.0)* | `ns.cloud.getServerUpgradeCost(host, ram)` | 0.1 GB | Cost to upgrade an existing purchased server's RAM. |
+| *(new in v3.0.0)* | `ns.cloud.upgradeServer(host, ram)` | 0.25 GB | Upgrade a purchased server's RAM in place. |
+| *(new in v3.0.0)* | `ns.cloud.renameServer(host, newName)` | 0 GB | Rename a purchased server. |
 
 ### 1.7 Logging & Output (All 0 GB unless noted)
 
@@ -605,7 +615,7 @@ Where `BaseCostFor1GBOfRamHome = 32000`.
 
 ### 9.3 Purchased Server Costs
 
-**Formula** (use `ns.getPurchasedServerCost(ram)` -- not hardcoded):
+**Formula** (use `ns.cloud.getServerCost(ram)` -- not hardcoded; see §1.6's v3.0.0 rename note):
 ```ts
 baseCost = 55000
 cost = baseCost * ram = 55000 * Math.pow(2, level)

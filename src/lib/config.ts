@@ -1,5 +1,3 @@
-import { NS } from '@ns';
-
 // ── Phase state machine enum (docs/design/02-system-architecture.md §1) ──────
 //
 // Published by cross/phase_detector.ts on PORT_PHASE.
@@ -71,6 +69,26 @@ export const TARGET_SECURITY_THRESHOLD = 3;
 /** Maximum number of simultaneous hack targets. */
 export const MAX_TARGETS = 4;
 
+// ── Priority tiers (dynamic RAM-budget/preemption layer) ──────────────────────
+//
+// Governs who yields RAM to whom when home/server RAM is tight. Lower number =
+// higher priority. See lib/machine_status.ts (per-machine budget + pressure
+// signal) and lib/exec_guard.ts (requestRun, the safe-launch primitive that
+// reads this tier to decide whether to wait/preempt/reduce/give up).
+export enum Priority {
+    /** brain.ts's own process only. Never yields, never preempted. */
+    BRAIN          = 0,
+    /** Perception/actuation infra: phase_detector, boot_agent, game_agent,
+     *  hacknet_manager, player_sequencer, reporter, control_console, pserv_manager. */
+    ESSENTIAL      = 1,
+    /** Substantial income-generating engines: coordinator.ts (batch engine),
+     *  the stock engine. Shrinks under pressure; rarely killed outright. */
+    INCOME_ENGINE  = 2,
+    /** Fully disposable compute: early_prepper, hwgw hack/grow/weaken batch
+     *  workers, share. Killed/relaunched at will. */
+    COMPUTE_WORKER = 3,
+}
+
 // ── Script paths ─────────────────────────────────────────────────────────────
 export const SCRIPT_PATHS = {
     // workers/ — ultra-thin HGW compute nodes (Phase 2b)
@@ -83,8 +101,8 @@ export const SCRIPT_PATHS = {
     share:          '/workers/share.js',
     simpleHackLoop: '/workers/simple_hack_loop.js',
     earlyPrepper:  '/workers/early_prepper.js',
-    // root — lean BOOTSTRAP entry; fits fresh 8 GB home, hands off to coordinator
-    bootstrap:      '/bootstrap.js',
+    // root — the single entry point (docs/design/14); replaces the old bootstrap.js
+    brain:          '/brain.js',
     // compute/ — orchestrators and infrastructure daemons
     coordinator:    '/compute/coordinator.js',
     pservManager:   '/compute/pserv_manager.js',
@@ -124,7 +142,7 @@ export const SCRIPT_PATHS = {
 /** Base RAM cost per worker script thread (GB). */
 export const SCRIPT_RAM_COST = 1.75;
 
-// ── Daemon catalog (managed by bootstrap.ts orchestrator) ─────────────────────
+// ── Daemon catalog (managed by brain.ts via lib/daemon_launcher.ts) ───────────
 //
 // Each entry declares the daemon path and the earliest DesignPhase at which it
 // may be spawned.  The orchestrator walks this list each tick and calls ns.exec
@@ -148,29 +166,36 @@ export function phaseRank(phase: DesignPhase): number {
 }
 
 /**
- * Ordered list of infrastructure daemons owned by the orchestrator (`bootstrap.ts`).
+ * Ordered list of infrastructure daemons owned by the orchestrator (`brain.ts`,
+ * via `lib/daemon_launcher.ts`).
  * `minPhase` is the earliest phase at which the daemon is eligible to launch.
  * `key` is a human-readable label (used in log output; not checked at runtime).
  * `args` are optional command-line arguments passed to the daemon on launch.
+ *
+ * NOTE: player/ui_actions.ts is deliberately NOT here — brain.ts calls its
+ * exported actions (buyTOR/buyAllPortOpeners/buyHomeRam/takeCourse) directly,
+ * inline, pre-SF4. Running `ui_actions.js --early-loop` as a SEPARATE catalog
+ * daemon at the same time would race the same DOM clicks against brain.ts's
+ * own calls to the same functions.
  */
-export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase; args?: string[] }[] = [
+export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase; priority: Priority; args?: string[] }[] = [
     // ── BOOTSTRAP — runs even at 8–16 GB home ────────────────────────────────
     // NOTE: spreader is a one-shot utility (exits after scan), NOT a persistent
-    // daemon.  The orchestrator inlines BFS-nuke via its own nukeAndScan() each
-    // tick; the spreader script is only needed as a periodic external call.
-    { key: 'hacknetManager',  path: SCRIPT_PATHS.hacknetManager,  minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'phaseDetector',   path: SCRIPT_PATHS.phaseDetector,   minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'bootAgent',       path: SCRIPT_PATHS.bootAgent,       minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'earlyPrepper',    path: SCRIPT_PATHS.earlyPrepper,    minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'uiActions',       path: SCRIPT_PATHS.uiActions,       minPhase: DesignPhase.BOOTSTRAP, args: ['--early-loop'] },
+    // daemon.  brain.ts inlines BFS-nuke via lib/daemon_launcher.ts's
+    // nukeAndScan() each tick; the spreader script is only needed as a
+    // periodic external call.
+    { key: 'hacknetManager',  path: SCRIPT_PATHS.hacknetManager,  minPhase: DesignPhase.BOOTSTRAP, priority: Priority.ESSENTIAL      },
+    { key: 'phaseDetector',   path: SCRIPT_PATHS.phaseDetector,   minPhase: DesignPhase.BOOTSTRAP, priority: Priority.ESSENTIAL      },
+    { key: 'bootAgent',       path: SCRIPT_PATHS.bootAgent,       minPhase: DesignPhase.BOOTSTRAP, priority: Priority.ESSENTIAL      },
+    { key: 'earlyPrepper',    path: SCRIPT_PATHS.earlyPrepper,    minPhase: DesignPhase.BOOTSTRAP, priority: Priority.COMPUTE_WORKER },
     // ── EARLY — available once home > PHASE_RAM_EARLY (16 GB) ────────────────
-    { key: 'pservManager',    path: SCRIPT_PATHS.pservManager,    minPhase: DesignPhase.EARLY     },
-    { key: 'gameAgent',       path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY     },
-    { key: 'stockEngine',     path: SCRIPT_PATHS.stockEngine,     minPhase: DesignPhase.EARLY     },
-    { key: 'playerSequencer', path: SCRIPT_PATHS.playerSequencer, minPhase: DesignPhase.EARLY     },
-    { key: 'controlConsole',  path: SCRIPT_PATHS.controlConsole,  minPhase: DesignPhase.EARLY     },
+    { key: 'pservManager',    path: SCRIPT_PATHS.pservManager,    minPhase: DesignPhase.EARLY,     priority: Priority.ESSENTIAL      },
+    { key: 'gameAgent',       path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY,     priority: Priority.ESSENTIAL      },
+    { key: 'stockEngine',     path: SCRIPT_PATHS.stockEngine,     minPhase: DesignPhase.EARLY,     priority: Priority.INCOME_ENGINE  },
+    { key: 'playerSequencer', path: SCRIPT_PATHS.playerSequencer, minPhase: DesignPhase.EARLY,     priority: Priority.ESSENTIAL      },
+    { key: 'controlConsole',  path: SCRIPT_PATHS.controlConsole,  minPhase: DesignPhase.EARLY,     priority: Priority.ESSENTIAL      },
     // ── MID — heavy batch engine (~15.85 GB import footprint); fits at ≥ 64 GB ─
-    { key: 'coordinator',     path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID       },
+    { key: 'coordinator',     path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID,       priority: Priority.INCOME_ENGINE  },
 ];
 
 // ── Batch operation constants ─────────────────────────────────────────────────
@@ -207,17 +232,8 @@ export const INTERVAL_UPGRADE_HOME_S    = 60;
 export const INTERVAL_SHARE_S           = 10;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Compute the effective home RAM reservation from the configured percentages and limits.
- * @param ns            NetScript API (needed for home max RAM).
- * @param minOverride   Optional minimum override (from --homeRam CLI flag).
- */
-export function calcHomeRamReservation(ns: NS, minOverride?: number): number {
-    const homeMaxRam = ns.getServerMaxRam('home');
-    const minReserve = minOverride ?? HOME_RAM_RESERVE_MIN;
-    return Math.max(
-        Math.min(homeMaxRam * HOME_RAM_RESERVE_FRACTION, HOME_RAM_RESERVE_MAX),
-        minReserve,
-    );
-}
+//
+// The home-RAM-reservation formula used to be copy-pasted here, in
+// RamManager.calcHomeReservation, and again inline in compute/coordinator.ts —
+// all three read the exact same HOME_RAM_RESERVE_* constants. It now lives in
+// one place: lib/machine_status.ts::getReservedRam(ns, 'home', ...).

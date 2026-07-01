@@ -51,18 +51,26 @@ Boundaries are tunable constants in one config file, not scattered magic numbers
 locks), report START/DONE task events for zero-poll RAM/thread accounting; distributed locks with
 force-clear timeout. Files reserved for the MCP bridge + Singularity RAM-dodge only.
 
-**Thread-P mechanism:** Singularity API wrapped in `getNsDataThroughFile`. Each P-module is
-**user-invokable now**; computes the optimal action from stats; for judgment calls it emits a
-notification and waits. Full-auto orchestration is a later phase.
+**Thread-P mechanism:** Singularity API wrapped in `getNsDataThroughFile`-style RAM-dodge
+(`lib/ns_dodge.ts::executeCommand`). **Updated 2026-07-01:** the "user-invokable now, full-auto
+later" framing below is superseded — `cross/player_sequencer.ts` (launched automatically by
+`brain.ts`, see [[14-roadmap-to-full-autoplay]] §1a) now drives most P-modules autonomously,
+gated per-capability by `lib/settings.ts`'s `BrainSettings` toggles rather than requiring a human
+to invoke each one. Judgment calls (irreversible spends, BitNode choice) still emit a notification
+and wait, unmodified. *Original text, kept for history:* Each P-module is **user-invokable now**;
+computes the optimal action from stats; for judgment calls it emits a notification and waits.
+Full-auto orchestration is a later phase.
 
 ### Control surface (cross-cutting) — per [00 §2.5](00-architecture-philosophy.md) + [04](04-player-automation-and-control.md)
 
 Two cross-cutting additions make the system steerable and hands-free, all under the **capability boundary**
 (act as a human, through human surfaces — never inspect/alter engine internals):
 
-- **`cross/launcher.ts`** — the *only* file permitted to touch the DOM. Drives the UI as a human would:
-  injects terminal commands to launch/kill scripts at ~0 RAM, and clicks real buttons where the API can't
-  reach (casino, pre-SF4). `ns.exec` fallback if the DOM path breaks on a game update.
+- **`cross/launcher.ts`** (terminal injection + screen-read) **and `lib/dom.ts`** (button clicks +
+  navigation) — the *only two* files permitted to touch the DOM (amended 2026-07-01, see
+  [04](04-player-automation-and-control.md) §3). Drives the UI as a human would: injects terminal
+  commands to launch/kill scripts at ~0 RAM, and clicks real buttons where the API can't reach
+  (casino, pre-SF4). `ns.exec`/`requestRun` fallback if the DOM path breaks on a game update.
 - **MCP control channel** — the agent (and user) trigger script launches and player actions over the port
   bus + game-bridge MCP. One human input to start; everything else is auto where trusted, MCP-triggerable
   where not. Spec: [04-player-automation-and-control.md](04-player-automation-and-control.md).
@@ -98,12 +106,24 @@ Spine chosen by user = **Core loop end-to-end** before side-engines.
 
 ## 5. What We Are Explicitly NOT Doing Yet
 
-- No auto-reset / auto-install (notify + recommend only) until trusted.
-- No BitNode auto-selection (pure judgment — always human).
-- No corporation automation initially (hybrid, ~30 min manual bootstrap, complex — defer).
-- No full-auto Thread-P orchestration — modules are user-invoked first.
+- No auto-reset / auto-install (notify + recommend only) until trusted — still true; toggleable
+  per-capability via `BrainSettings` once trusted (see [[14-roadmap-to-full-autoplay]] gap #1).
+- No BitNode auto-selection (pure judgment — always human) — still true; open gap, see
+  [[14-roadmap-to-full-autoplay]] gap #6.
+- No corporation automation initially (hybrid, ~30 min manual bootstrap, complex — defer) — still
+  true (`corp_manager.ts` is a deferred stub, see [[11-subsystem-autonomy-and-console-v2]] §6).
+- ~~No full-auto Thread-P orchestration — modules are user-invoked first~~ — **superseded 2026-07-01**:
+  most P-modules now run autonomously via `cross/player_sequencer.ts` (settings-toggle-gated, not
+  human-invoked per action). See §2's update above.
 
 ---
 
 *Status: high-level design complete. Next: Wave 3 grounds each numbered build-order item into an
 actionable spec (interfaces, ports, RAM budget, file layout) before any code is written.*
+
+*Updated 2026-07-01: the static, monotonic daemon-launch model implied by §1's phase table (a
+daemon becomes eligible at a phase threshold and is never re-evaluated) has been replaced by a
+dynamic priority/RAM-budget/preemption layer — see [[14-roadmap-to-full-autoplay]] §1a for the
+full design (`Priority` enum, `lib/machine_status.ts`, `lib/exec_guard.ts::requestRun`). The phase
+table itself is still accurate as a description of what strategy is active at each stage; only the
+launch-once-and-forget mechanism underneath it changed.*

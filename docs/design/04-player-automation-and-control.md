@@ -59,11 +59,20 @@ can achieve (both can perform player actions) but differ in **mechanism, RAM cos
 
 ---
 
-## 3. The Contained Launcher — `cross/launcher.ts`
+## 3. The Contained Launcher — `cross/launcher.ts` + `lib/dom.ts`
 
-**Architectural law: this is the ONLY file in the repo permitted to touch the DOM.** Every other module
-stays clean and idiomatic. The DOM fragility — the one thing that breaks on a game update — lives in
-exactly one quarantined place.
+**Architectural law (amended 2026-07-01): exactly two files in the repo are permitted to touch the DOM,
+each with one clear job.** Every other module stays clean and idiomatic. The DOM fragility — the one
+thing that breaks on a game update — lives in exactly these two quarantined places, not scattered:
+
+- **`cross/launcher.ts`** — terminal-command injection (3a) and screen-read (`readScreen`). Used by
+  `cross/game_agent.ts`'s control channel and file-relay paths.
+- **`lib/dom.ts`** — button-clicks and sidebar/location navigation (3b): buy TOR, buy home RAM,
+  take a course, click a City location. Used by `player/ui_actions.ts` and `brain.ts`'s pre-SF4
+  acquire branch. Delegates sidebar navigation itself to `lib/navigator.ts` (the more robust
+  implementation — handles a collapsed sidebar section, caches the fiber `clickPage` lookup).
+
+Both are UI-interfacing only — never data reads (§1 ruling still applies to both, without exception).
 
 - **Capabilities:** 3a terminal-command injection (launch/kill scripts at ~0 RAM) and 3b UI clicks
   (casino, pre-SF4 player actions). Both are **UI interfacing only** — never data reads (§1 ruling).
@@ -91,13 +100,20 @@ exactly one quarantined place.
 
 ---
 
-## 3a. Compute-thread daemon spawning — manager decision (2026-06-29)
+## 3a. Compute-thread daemon spawning — manager decision (2026-06-29, superseded 2026-07-01)
 
 All infrastructure daemon lifecycle (spreader, hacknetManager, phaseDetector, bootAgent,
-pservManager, gameAgent, stockEngine, and coordinator) is owned by the `bootstrap.ts`
-orchestrator using **`ns.exec` + `ns.ps`-based running-set guards (Mechanism #1)**.
+pservManager, gameAgent, stockEngine, and coordinator) is owned by `brain.ts` — the single
+entry point (docs/design/14) — via `lib/daemon_launcher.ts`, using **`requestRun`
+(`lib/exec_guard.ts`) + `ns.ps`-based running-set guards**. `requestRun` wraps the same
+`ns.exec`-based mechanism (Mechanism #1) this section originally described; it adds a shared
+RAM-budget check (`lib/machine_status.ts`) and priority tagging on top, but every daemon launch
+still bottoms out in one `ns.exec` call per process, same as before.
 `cross/launcher.ts` (Mechanism #3a) is reserved for terminal-only commands, player UI actions,
-and MCP hands-free control.
+and MCP hands-free control. `bootstrap.ts` (the file originally described here) no longer
+exists — its daemon-catalog-walk logic was extracted into `lib/daemon_launcher.ts`, which
+`brain.ts` calls as one step of its own per-tick loop rather than being a second, separate
+top-level entry point.
 
 **Why `ns.exec`, not `launch()`:**
 - **RAM-equivalent:** the orchestrator already pays the 1.3 GB `ns.exec` cost for worker spray,
@@ -271,3 +287,8 @@ The line is "what's painted on screen" vs "what's in the engine.")
 ---
 
 *Status: RATIFIED. Steps 1–6 built and `tsc`-green (2026-06-29). Steps 1–4 and 6 in-game validated. Step 5 pending in-game validation (deploy updated game_agent). Derived from [00 §2.5](00-architecture-philosophy.md).*
+
+*Amended 2026-07-01: §3's DOM law now names two canonical files (see §3), not one; §3a's daemon-spawning
+owner is `brain.ts`/`lib/daemon_launcher.ts`, not `bootstrap.ts` (deleted — see [14](14-roadmap-to-full-autoplay.md)).
+MCP's role is dev/debug tooling only, never a runtime dependency of `brain.ts` — see
+[mcp-control-channel-usage.md](../mcp-control-channel-usage.md) §0.*

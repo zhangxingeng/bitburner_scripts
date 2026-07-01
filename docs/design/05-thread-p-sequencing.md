@@ -1,6 +1,6 @@
 # Thread-P Sequencing — The Autonomous Player Brain
 
-> Formalizes the architecture decision from [handoff-autoplay.md](../handoff-autoplay.md) §3:
+> Formalizes the architecture decision from [handoff-autoplay.md](../archive/handoff-autoplay.md) §3:
 > where the Thread-P brain lives, how it sequences trusted actions, and how it surfaces
 > judgment calls over the control channel. **Ratified by the user 2026-06-29.**
 >
@@ -90,24 +90,24 @@ The tight-RAM constraint (8 GB home early game) prevents the brain from co-locat
 
 | Stage | RAM gate | What happens | Notes |
 |-------|----------|--------------|-------|
-| 0 — Survive & earn | any | Root network, spray simple hackers, start income | `bootstrap.ts` already handles this |
+| 0 — Survive & earn | any | Root network, spray simple hackers, start income | `brain.ts` already handles this |
 | 1 — Ramp RAM to floor | home < `brainRamFloorGb` | Auto-buy home RAM upgrades / cheap pservers | Loop until home clears the floor (~16 GB) |
-| 2 — Online the brain | home ≥ `brainRamFloorGb` | `bootstrap.ts` auto-starts `player_sequencer` | No second human action needed |
+| 2 — Online the brain | home ≥ `brainRamFloorGb` | `brain.ts` (via lib/daemon_launcher.ts) auto-starts `player_sequencer` | No second human action needed |
 | 3+ — Widen | growing | More compute, more trusted actions, full reset cycle | Brain handles from here |
 
 **Key principle:** the brain's start is automatic but conditional on RAM. The RAM floor
 (`brainRamFloorGb`) is a tunable in `BrainSettings` (§1), defaulting to 16 GB. The single
-human trigger is `run /bootstrap.js`; everything after is self-staged.
+human trigger is `run /brain.js`; everything after is self-staged.
 
 `game_agent` (~6.6 GB) alone cannot fit the brain (~4 GB target) on an 8 GB home — Stage 1
-must complete before Stage 2 fires. `bootstrap.ts` detects the floor crossing via
+must complete before Stage 2 fires. `brain.ts` detects the floor crossing via
 `ns.getServerMaxRam('home')` each tick and launches the sequencer once it clears.
 
 ---
 
 ## 3. The Sequencer Loop
 
-**Proposed daemon:** `src/cross/player_sequencer.ts`, launched by `bootstrap.ts` at EARLY phase
+**Proposed daemon:** `src/cross/player_sequencer.ts`, launched by `brain.ts` (via lib/daemon_launcher.ts's DAEMON_CATALOG walk) at EARLY phase
 (once home RAM > `brainRamFloorGb`). Add it to `DAEMON_CATALOG` in `lib/config.ts` with
 `minPhase: EARLY`.
 
@@ -277,7 +277,7 @@ affordable augmentations. The confirmed RESET phase is published to PORT_PHASE (
 4. On approval (or auto-proceed):
    - Fire `player/aug_planner.js --purchase` via PORT_LAUNCHER.
    - Verify augs were purchased via `ns.singularity.getOwnedAugmentations(true)`.
-   - Fire `ns.singularity.installAugmentations('/bootstrap.js')` via PORT_LAUNCHER inject.
+   - Fire `ns.singularity.installAugmentations('/brain.js')` via PORT_LAUNCHER inject.
    - The game resets; bootstrap re-runs; sequencer restarts from BOOTSTRAP phase on the new node.
 
 **Default: no auto-reset.** The installation call is irreversible. `autoReset` defaults OFF;
@@ -384,7 +384,7 @@ RAM is the binding constraint. Every new daemon must pass a `calculate_ram` pre-
 | Script | Measured RAM | Notes |
 |--------|-------------|-------|
 | `game_agent.js` | ~6.55–6.65 GB | Must run for MCP port I/O to work |
-| `bootstrap.js` | ~4.8 GB | Orchestrator; exits after daemons launched |
+| `brain.js` | ~4.8 GB pre-rewrite (bootstrap.ts); **needs re-measurement** | Single entry point; persistent loop, never exits (this row's "exits after daemons launched" was already inaccurate for the old bootstrap.ts and is fixed here) |
 | `phase_detector.js` | ~4.45 GB | Inlined BFS; runs on any rooted server |
 | `contract_solver.js` | ~22 GB | Too heavy to auto-trigger; lean before enabling |
 | `player_sequencer.js` | TBD | Target: ≤ 4 GB; all Singularity calls via ns_dodge |
@@ -444,7 +444,7 @@ the UI can be built and iterated without touching the brain.
 - **`contract_solver` RAM:** manual-only (`autoSolveContracts` OFF) until the solver is leaned
   below ~8 GB. Not on the auto queue for milestone 1. *(Resolved — default behavior.)*
 
-**Remaining:**
+**Remaining (mostly resolved by build — see footer; kept for historical context):**
 
 - **TODO(design): `settings.ts` shape finalization.** Confirm the `BrainSettings` interface
   (field names, types, defaults) and the file path (`src/lib/settings.ts`) before first build.
@@ -469,7 +469,10 @@ the UI can be built and iterated without touching the brain.
 
 ---
 
-*Status: RATIFIED (decision, shape, and configuration model). Not yet built. Build pending:
-`src/cross/player_sequencer.ts`, `src/lib/settings.ts`, `src/ui/config_dashboard.tsx`.
-Derived from [handoff-autoplay.md](../handoff-autoplay.md) §3 +
+*Status: RATIFIED and BUILT (updated 2026-07-01 — this footer previously said "not yet built,"
+which was stale). `src/cross/player_sequencer.ts` and `src/lib/settings.ts` exist and are wired
+into `DAEMON_CATALOG` at EARLY phase. `config_dashboard.tsx` was never built under that name —
+its role was absorbed by the broader `src/ui/control_console.tsx` (see
+[08-control-console.md](08-control-console.md)), which exists and is also in the catalog.
+Derived from [handoff-autoplay.md](../archive/handoff-autoplay.md) §3 +
 [04-player-automation-and-control.md](04-player-automation-and-control.md) §4.*

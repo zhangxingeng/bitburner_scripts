@@ -107,7 +107,7 @@ STEP 3 — Bootstrap game_agent via browser
   # connected"; mcp__bitburner__terminal ping round-trip succeeds.
 
 STEP 4 — All subsequent MCP terminal commands now work
-  # mcp__bitburner__terminal("run /bootstrap.js")
+  # mcp__bitburner__terminal("run /brain.js")
   # mcp__bitburner__terminal("run /dev/cheat.js --sf 4")
   # etc.
 ```
@@ -215,7 +215,9 @@ run /dev/cheat.js --money 1e10   # WSE account costs ~200M; 4S TIX API costs ~25
 ## §3 Per-script verification matrix
 
 > **Legend:** ✓ = concrete pass criteria defined | ~ = template only (fill in on first run)
-> Launch column assumes `game_agent` and `bootstrap.js` are running unless noted.
+> Launch column assumes `game_agent` and `brain.js` are running unless noted.
+> (Updated 2026-07-01: `bootstrap.js` no longer exists — its role was absorbed into `brain.js`
+> via `lib/daemon_launcher.ts`, see [[14-roadmap-to-full-autoplay]] §1a. Rows below updated.)
 
 ### §3.1 Infrastructure / cross
 
@@ -223,23 +225,23 @@ run /dev/cheat.js --money 1e10   # WSE account costs ~200M; 4S TIX API costs ~25
 |---|---|---|---|---|
 | `cross/game_agent.js` | Browser click → `run /cross/game_agent.js` | None | `ns.ps('home')` lists it; bridge logs WS connect; `status/heartbeat.txt` written within 1 s | ping round-trip via `mcp__bitburner__terminal` succeeds; `status/heartbeat.txt` `alive:true` |
 | `cross/boot_agent.js` | `run /cross/boot_agent.js` | None | Appears in ps; PORT_CMD commands dispatched | Send `{id:"t1",method:"ps"}` to PORT_CMD, read PORT_RESULT: `success:true` |
-| `cross/launcher.js <cmd>` | `run /cross/launcher.js run /bootstrap.js` | None | Terminal shows the injected command running | Bootstrap appears in ps; no `ERROR [launcher]` in terminal |
+| `cross/launcher.js <cmd>` | `run /cross/launcher.js run /brain.js` | None | Terminal shows the injected command running | `brain.js` appears in ps; no `ERROR [launcher]` in terminal |
 | `cross/phase_detector.js` | `run /cross/phase_detector.js` | None | PORT_PHASE written; `status/heartbeat.txt` alive | peek(PORT_PHASE) returns a valid DesignPhase string |
 | `cross/player_sequencer.js` | `run /cross/player_sequencer.js` | SF4 for Sing. calls | Decisions flow to `status/decisions.json`; PORT_DECISION populated | At least one decision entry appears within 10 s; no insta-crash |
 | `cross/notification.js` | imported (not standalone) | — | — | — |
 | `cross/reporter.js` | imported (not standalone) | — | — | — |
 
-### §3.2 Bootstrap
+### §3.2 Entry point
 
 | Script | How to launch | Cheat first | Expected observable | Pass criteria |
 |---|---|---|---|---|
-| `bootstrap.js` | `run /bootstrap.js` (via MCP terminal after game_agent up) | None | `ORCHESTRATOR: launched ...` tprints as home RAM allows; rooted servers list grows | `ns.ps('home')` shows spawned daemons within 30 s; no crash |
+| `brain.js` | `run /brain.js` (via MCP terminal after game_agent up, or directly — has zero MCP dependency, see [[14-roadmap-to-full-autoplay]] §1a) | None | `ORCHESTRATOR: launched ...` tprints as home RAM allows; rooted servers list grows; pre-SF4, `[ui]`/`[brain]` prints show TOR/program/RAM/course purchase attempts | `ns.ps('home')` shows spawned daemons within 30 s; no crash; disconnecting MCP entirely does not affect behavior |
 
 ### §3.3 Compute stack
 
 | Script | How to launch | Cheat first | Expected observable | Pass criteria |
 |---|---|---|---|---|
-| `compute/coordinator.js` | Auto-launched by bootstrap | None (but needs RAM ≥ 64 GB) | `--ram 64` then check ps | Batcher logic starts; worker spraying stops | `status/heartbeat.txt` alive; coordinator in ps |
+| `compute/coordinator.js` | Auto-launched by brain.ts | None (but needs RAM ≥ 64 GB) | `--ram 64` then check ps | Batcher logic starts; worker spraying stops | `status/heartbeat.txt` alive; coordinator in ps |
 | `compute/pserv_manager.js` | `run /compute/pserv_manager.js` | `--money 1e12`; **also fix ns.cloud.* bug first** (§5.2) | Purchases pserv-0 if money allows | Purchased server appears in `ns.cloud.getServerNames()` |
 | `compute/hacknet_manager.js` | `run /compute/hacknet_manager.js` | `--money 1e9` | Buys hacknet nodes | Node count increments; no crash |
 | `compute/target_selector.js` | imported (not standalone) | **fix ns.cloud.* bug first** | — | — |
@@ -293,7 +295,7 @@ run /dev/cheat.js --money 1e10   # WSE account costs ~200M; 4S TIX API costs ~25
 | Script | How to launch | Cheat first | Expected observable | Pass criteria |
 |---|---|---|---|---|
 | `ui/console_types.js` | imported only | — | — | — |
-| Console panels | Launched by sequencer / bootstrap when UI is up | — | Panels rendered in game UI | No crash; panels visible in dev build |
+| Console panels | Launched by sequencer / brain.ts when UI is up | — | Panels rendered in game UI | No crash; panels visible in dev build |
 
 ### §3.8 Dev
 
@@ -497,5 +499,13 @@ Operational gotchas to fold into the harness procedure:
 2. **claude-in-chrome may be absent** (extension not installed) → fall back to `mcp__playwright__*`. Both are valid Step-3 bootstrap browsers.
 3. **⚠ Terminal submit — CONFIRMED BUG (source-verified 2026-06-30).** `launcher.ts` `runTerminalCommand` calls `handlers.onChange({target:{value:cmd}})` then `handlers.onKeyDown({key:'Enter'})` **synchronously**. But the game's `TerminalInput.tsx` `onKeyDown` reads the command from `value` (React **state**, line 244), and the captured `onKeyDown` closure still holds the PRE-`onChange` value (the `setValue` hasn't re-rendered yet) — so Enter submits the stale/empty value: the text shows in the input box but nothing runs. **Blast radius:** `runTerminalCommand` is called only by `game_agent` (the MCP/control channel) and `launcher`'s own helpers — the brain launches daemons via `ns.exec`/`ns.run`, so **autoplay is NOT blocked**; this breaks the dev/agent terminal path. **Fix direction:** use native events (native value-setter + dispatch a real `input` event, then a real `keydown` Enter), OR re-read `handlers` off the fiber after a render tick so `onKeyDown` closes over the fresh `value`. Verify the fix by running it, not on a green tsc. Same React-synthetic-vs-native theme as [[12-navigation-interaction-layer]] §1's isTrusted audit. [[mcp-act-path-gotchas]]
 4. **`game_agent` ≈ 8 GB.** On a fresh 8 GB home it leaves no room for `cheat.js` (chicken-egg for `--ram`). Dev workaround: set `Player.getHomeComputer().maxRam` directly via Playwright before cheating. NOTE: `game_agent` is the MCP/attended control channel — NOT required for headless autoplay — so this is a dev-loop cost, not an autoplay blocker.
+5. **Same chicken-egg, MCP-only variant (no browser attached, 2026-07-01).** If `game_agent.js` is the only thing consuming the RAM headroom (e.g. `brain.js` also can't fit alongside it on a fresh 8 GB home), you don't need Playwright — just have the human type the sequence directly in the game terminal, since killing `game_agent.js` drops the MCP control channel (and its file-relay fallback, which also depends on `game_agent.js` polling `status/.cmd.json`) mid-flight, so the agent can't inject the follow-up commands itself:
+   ```
+   kill /cross/game_agent.js
+   run /dev/cheat.js --ram <n>
+   run /cross/game_agent.js   # optional — only needed for MCP observability, not gameplay
+   run /brain.js
+   ```
+   `get_status` will show `controlConnected:false` for the few seconds between the `kill` and the second `run` — that's expected, not a bug.
 5. **No `notifications.txt` in steady state is HEALTHY** — the sequencer only notifies on events (e.g. "SF4 missing"); a quiet baseline = no news, not a failure.
 6. **Playwright MCP `browser_click`/`browser_type` need a `target`/ref arg** not obvious from the tool name; `browser_evaluate` is the reliable fallback for in-page logic.

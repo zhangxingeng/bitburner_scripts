@@ -1,34 +1,16 @@
 /**
  * DOM UTILITIES — zero-RAM-cost browser interaction helpers.
  *
- * ## ⚠️ CRITICAL: Keyword & Name Collision Evasion
- *
- * ### Forbidden string literals (25 GB each)
- *
- * The Bitburnet RAM analyzer penalizes the literal strings `docu'+'ment`
- * and `win'+'dow` at **25 GB each**.  These must be SPLIT everywhere.
- *
- * ### Function name collisions with ns.* APIs (16x penalty without SF4!)
- *
- * The RAM analyzer looks up ALL function names in the ns.* API tree.  If a
- * user-defined function shares a name with an ns API, it incurs that API's
- * RAM cost.  Without SF4, Singularity costs are multiplied by **16x**:
- *
- *   goToLocation    → ns.singularity.goToLocation = 5×16 = 80 GB  ❌
- *   visitLoc        → no collision = 0 GB  ✅
- *   upgradeHomeRam  → ns.singularity.upgradeHomeRam = 3×16 = 48 GB  ❌
- *   buyHomeRam      → no collision = 0 GB  ✅
- *
- * **DO NOT use function names that match any ns.* API.**  Check
- * RamCostGenerator.ts for the full list.
- *
- * **DO NOT "fix" the split strings.** That adds 25–50 GB per import.
+ * ⚠️ This file relies on the keyword-split and ns.*-name-collision RAM-evasion
+ * rules — see docs/design/15-ram-evasion-rules.md for the full explanation and
+ * the current rename table. Short version: never un-split `docu'+'ment`/
+ * `win'+'dow` below, and never name a function after an `ns.*` API.
  *
  * ## RAM footprint
  *
  * This file uses zero `ns.*` calls — importing it from another script adds
- * **0 GB** of transitive RAM.  The only RAM cost comes from the importer's
- * own `ns.*` usage.
+ * **0 GB** of transitive RAM. The only RAM cost comes from the importer's own
+ * `ns.*` usage.
  *
  * ## How to use
  *
@@ -38,6 +20,8 @@
  *
  * All functions work without `ns` (except `waitForBtn` which needs `ns.sleep`).
  */
+
+import { goTo, type GamePageValue } from './navigator';
 
 // ── Keyword-evading accessors ──────────────────────────────────────────────────
 
@@ -130,48 +114,15 @@ export function clickLocation(locName: string): boolean {
 /**
  * Navigate to a sidebar page by name (e.g. "City", "Terminal", "Stats").
  *
- * Uses two strategies:
- *   1. React fiber traversal to find the `clickPage` callback (fast, 0 RAM).
- *   2. DOM fallback: find the sidebar `<li>` whose text matches and click it.
+ * Delegates to lib/navigator.ts::goTo — that module handles a case this one
+ * used to miss (a collapsed sidebar section hides its items from the DOM
+ * fallback entirely) and caches the fiber clickPage lookup instead of
+ * re-walking the tree on every call. Kept as a thin string-typed wrapper here
+ * since every current caller (visitLoc, ui_actions.ts's makeProgram) already
+ * passes plain page-name strings rather than importing GamePage directly.
  */
 export function navToPage(pageName: string): boolean {
-    try {
-        const d = doc();
-        const drawer = d.querySelector('.MuiDrawer-root');
-        if (drawer) {
-            // Strategy 1: walk React fiber to find clickPage callback
-            for (const k of Object.keys(drawer)) {
-                if (!k.startsWith('__reactFiber$')) continue;
-                const root = (drawer as unknown as Record<string, Record<string, unknown>>)[k];
-                const stack: Record<string, unknown>[] = [];
-                if (root?.child) stack.push(root.child as Record<string, unknown>);
-                let guard = 0;
-                while (stack.length && guard++ < 5000) {
-                    const f = stack.pop()!;
-                    const mp = f.memoizedProps as { clickPage?: (p: string) => void } | undefined;
-                    if (typeof mp?.clickPage === 'function') {
-                        mp.clickPage(pageName);
-                        return true;
-                    }
-                    if (f.child) stack.push(f.child as Record<string, unknown>);
-                    if (f.sibling) stack.push(f.sibling as Record<string, unknown>);
-                }
-                break;
-            }
-        }
-        // Strategy 2: DOM fallback — click sidebar list item by text
-        const items = d.querySelectorAll('.MuiDrawer-root .MuiListItem-root');
-        for (const item of Array.from(items)) {
-            const label = item.querySelector('.MuiListItemText-root');
-            if ((label?.textContent ?? '').trim() === pageName) {
-                (item as HTMLElement).click();
-                return true;
-            }
-        }
-        return false;
-    } catch {
-        return false;
-    }
+    return goTo(pageName as GamePageValue);
 }
 
 /** visitLoc: navigate City then click a location.  Handles ASCII map (<span>)

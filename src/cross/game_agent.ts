@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { runTerminalCommand, readScreen } from './launcher';
+import { runTerminalCommandEnsured, readScreen } from './launcher';
 import { PORT_HEARTBEAT, PORT_DECISION, PORT_LAUNCHER, PORT_NOTIFY, popPort, peekPort, pushPort } from '../lib/ports';
 import { loadPending, pushReply, type PendingDecision, type Verdict } from '../lib/decisions';
 
@@ -243,7 +243,7 @@ function mirrorNotify(ns: NS): unknown[] {
  * to PORT_NOTIFY.  Prevents double-spawning persistent player modules
  * (faction_manager, crime) triggered via MCP without checking first.
  */
-function processLauncherCommands(ns: NS): void {
+async function processLauncherCommands(ns: NS): Promise<void> {
     const command = popPort(ns, PORT_LAUNCHER);
     if (command === null || command === '') return;
 
@@ -260,7 +260,7 @@ function processLauncherCommands(ns: NS): void {
         }
     }
 
-    const ok = runTerminalCommand(command);
+    const ok = await runTerminalCommandEnsured(ns, command);
     ns.print(`Launcher inject ${ok ? 'OK' : 'FAILED'}: ${command}`);
     pushPort(ns, PORT_NOTIFY, JSON.stringify({
         ts: Date.now(), type: 'LAUNCHER_INJECT', command, ok,
@@ -269,7 +269,7 @@ function processLauncherCommands(ns: NS): void {
 
 // ── Command Execution (RFA file-relay path) ──
 
-function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
+async function executeCommand(ns: NS, cmd: GameCommand): Promise<CommandResult> {
     const result: CommandResult = { id: cmd.id, success: false };
 
     try {
@@ -381,7 +381,7 @@ function executeCommand(ns: NS, cmd: GameCommand): CommandResult {
                         break;
                     }
                 }
-                const injected = runTerminalCommand(cmd.command);
+                const injected = await runTerminalCommandEnsured(ns, cmd.command);
                 result.success = true;
                 result.data    = { injected };
                 break;
@@ -452,13 +452,16 @@ function isControlCmd(m: unknown): m is ControlCmd {
  *
  * Called from the MAIN LOOP (after draining the `inbound` queue), NOT from the WS
  * onmessage callback — so it runs inside the Netscript async context and ns.* calls
- * are safe here.  Kept synchronous for simplicity; an async ns call (e.g. ns.hack)
- * could be awaited here if a future command needs one.
+ * are safe here.  Async: the 'terminal' case awaits `runTerminalCommandEnsured`,
+ * which polls up to 800ms if the game isn't already on the Terminal page — this
+ * blocks the drain of anything else queued behind it in `inbound`, an accepted
+ * tradeoff since terminal commands are infrequent and the alternative (bare
+ * runTerminalCommand's silent no-op off-page) is worse.
  */
-function handleControlCmd(
+async function handleControlCmd(
     ns:  NS,
     m:   ControlCmd,
-): { t: 'res'; id: number; ok: boolean; data?: unknown; error?: string } {
+): Promise<{ t: 'res'; id: number; ok: boolean; data?: unknown; error?: string }> {
     const { id, method, params } = m;
     try {
         switch (method) {
@@ -476,7 +479,7 @@ function handleControlCmd(
                         return { t: 'res', id, ok: true, data: { injected: false } };
                     }
                 }
-                const injected = runTerminalCommand(command);
+                const injected = await runTerminalCommandEnsured(ns, command);
                 return { t: 'res', id, ok: true, data: { injected } };
             }
 
@@ -689,7 +692,7 @@ export async function main(ns: NS): Promise<void> {
             // WS callback. ws.send is a browser API (not ns), so replying from the loop is safe.
             while (inbound.length > 0) {
                 const cmd = inbound.shift()!;
-                const res = handleControlCmd(ns, cmd);
+                const res = await handleControlCmd(ns, cmd);
                 try { ws?.send(JSON.stringify(res)); } catch { /* socket dropped; onclose will reset */ }
             }
 
@@ -714,7 +717,7 @@ export async function main(ns: NS): Promise<void> {
                 const screenText = mirrorScreen(ns, tick);
 
                 // Drain one terminal command from PORT_LAUNCHER (RFA fallback path)
-                processLauncherCommands(ns);
+                await processLauncherCommands(ns);
 
                 // Push state frames over the control channel when connected.
                 // File mirrors above always run so the RFA fallback path keeps working
@@ -735,7 +738,7 @@ export async function main(ns: NS): Promise<void> {
                 const fileCmd = readJson<GameCommand>(ns, CMD_FILE);
                 if (fileCmd?.id && fileCmd?.method) {
                     ns.print(`Agent: executing ${fileCmd.id} [${fileCmd.method}]`);
-                    const result = executeCommand(ns, fileCmd);
+                    const result = await executeCommand(ns, fileCmd);
                     writeJson(ns, RESULT_FILE, result);
                     deleteFile(ns, CMD_FILE);
                 }

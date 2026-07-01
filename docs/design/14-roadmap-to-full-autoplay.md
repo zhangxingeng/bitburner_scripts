@@ -28,13 +28,48 @@ We are NOT there. We have a strong skeleton and most of the limbs, but **the pre
 - `dev/cheat.js` redesigned **surgical** (no-op unless a knob is named; blanket grants mask bugs).
 
 **The honest gaps (why it can't yet play the whole game):**
-1. **The reset loop never closes** — `ns.singularity.installAugmentations(...)` is called *nowhere*. We buy augs and never install them. (audit gap #1)
-2. **Terminal injection silently fails off the Terminal page** — `launcher.ts` doesn't call `ensureTerminal()` first (design/06 §6 step 4 never landed). A likely contributor to "is anything even running?". (gap #3)
-3. **No action-level navigation** — the brain can switch sidebar pages but cannot click in-page controls (travel, apply-for-job, buy-aug, donate, assign-sleeve). → [[12-navigation-interaction-layer]]
-4. **Crime never fires** — `crime.ts` works but isn't in the registry; karma grind (gates Daedalus, etc.) never happens. (gap #2)
-5. **Company work missing** — megacorp faction invites never arrive → 8+ factions and their exclusive augs are unreachable. (gap #4)
-6. **BitNode selection missing** — after a reset the brain would stall at the BitVerse. (gap #5)
-7. Smaller: grafting is report-only (gap #7), aug pricing ignores SF11 + can't donate (gap #8), bladeburner Black Ops aren't surfaced (gap #6), `contract_solver` is 22 GB (gap #9), stock↔hack coupling unbuilt (gap #10).
+1. **The reset loop never closes** — `ns.singularity.installAugmentations(...)` is called *nowhere*. We buy augs and never install them. (audit gap #1) — **still open.**
+2. ~~**Terminal injection silently fails off the Terminal page**~~ — **CLOSED 2026-07-01.** `game_agent.ts`'s three terminal-injection call sites (control-channel `handleControlCmd`, the file-relay `executeCommand`, and the legacy `processLauncherCommands`) now all call `runTerminalCommandEnsured` (`cross/launcher.ts`), which calls `ensureTerminal()` (`lib/navigator.ts`) and polls for the Terminal page to become active before injecting — previously only the file-relay path attempted this, and even `launcher.ts`'s own `runTerminalCommand` primitive only *signaled* the caller to retry rather than actually waiting. See [[15-ram-evasion-rules]]'s sibling doc note and Round 1 track 1C below.
+3. **No action-level navigation** — the brain can switch sidebar pages but cannot click in-page controls (travel, apply-for-job, buy-aug, donate, assign-sleeve). → [[12-navigation-interaction-layer]] — **still open.**
+4. **Crime never fires** — `crime.ts` works but isn't in the registry; karma grind (gates Daedalus, etc.) never happens. (gap #2) — **still open.**
+5. **Company work missing** — megacorp faction invites never arrive → 8+ factions and their exclusive augs are unreachable. (gap #4) — **still open.**
+6. **BitNode selection missing** — after a reset the brain would stall at the BitVerse. (gap #5) — **still open.**
+7. Smaller: grafting is report-only (gap #7), aug pricing ignores SF11 + can't donate (gap #8), bladeburner Black Ops aren't surfaced (gap #6), `contract_solver` is 22 GB (gap #9), stock↔hack coupling unbuilt (gap #10). — **all still open.**
+
+---
+
+## §1a Update — 2026-07-01: brain.ts is now the single entry point, plus a priority/RAM-budget layer
+
+A separate, previously-undocumented pivot landed the same day this roadmap was last touched, and
+then a follow-up session (this one) finished it and reconciled the docs. Recorded here since this
+doc is the canonical "current state" reference:
+
+- **`bootstrap.ts` is deleted.** Its daemon-catalog-walk logic (`launchEligibleDaemons`,
+  `currentPhase`/`estimatePhase`, `nukeAndScan`, `pickTarget`, `deployWorkers`) was extracted into
+  `lib/daemon_launcher.ts` — a pure, NS-parameterized library, not a competing top-level entry point.
+- **`brain.ts` is the single entry point** (`run /brain.js` is the only thing the user types, on a
+  fresh game or after a reset). Per tick it: (1) runs BFS/nuke + worker-spray + calls
+  `daemon_launcher.launchEligibleDaemons`, (2) pre-SF4 only, mimics human UI actions directly
+  (buy TOR, port openers, home RAM, a course) via `player/ui_actions.ts`'s exported functions —
+  no separate process, since these are just clicks/keystrokes — and (3) once SF4 is detected, stops
+  that branch entirely and defers to `cross/player_sequencer.ts` (already in `DAEMON_CATALOG`) for
+  all further purchasing, so there is never more than one purchaser running at once.
+  `player/ui_actions.ts --early-loop` was removed from `DAEMON_CATALOG` for this reason (it would
+  otherwise race brain.ts's own calls to the same functions).
+- **A priority/RAM-budget/preemption layer now sits under all of this** (`lib/config.ts`'s `Priority`
+  enum — `BRAIN` > `ESSENTIAL` > `INCOME_ENGINE` > `COMPUTE_WORKER` — `lib/machine_status.ts`'s
+  per-machine budget files, and `lib/exec_guard.ts`'s `requestRun`, the shared safe-launch
+  primitive). `DAEMON_CATALOG` entries are tagged with priority; `lib/daemon_launcher.ts` launches
+  through `requestRun` instead of a bare `ns.exec`; `hwgw_batcher.ts`'s existing
+  `reduceActiveBatchLoad` preemption hook now also reacts to a published pressure signal, not just
+  its own local RAM-violation check. This closes a real, previously-unnoticed inconsistency: the old
+  `bootstrap.ts` daemon launcher never subtracted the home RAM reservation at all, while the compute
+  stack (`RamManager`) always had — the two disagreed about how much home RAM was actually free.
+- **MCP is explicitly scoped as dev/debug tooling only**, never a runtime dependency of `brain.ts` —
+  see `docs/mcp-control-channel-usage.md` §0.
+- This does not change §2–§7 below — the reset loop, nav/action layer, crime, company work, and
+  BitNode selection gaps are orthogonal to this pivot and remain exactly as described. Round 1's
+  scope (§4) is unaffected except where noted inline (tracks 1C and 1G, below).
 
 ---
 
@@ -51,7 +86,7 @@ Most of the top-10 are leaves. **The spine — the few things that turn a pile o
 
 `ensureTerminal` + the script audit make the foundation trustworthy. `installAugmentations` + BitNode-select close the autonomy loop (this is the single highest-leverage work). The nav layer unlocks everything that needs an in-page click — most importantly **company work**, which is the gate to the back half of the faction/aug tree.
 
-Three of the four spine items (`ensureTerminal`, reset call, crime wiring) are **Small**. We can close the autonomy loop in Round 1.
+Three of the four spine items (`ensureTerminal`, reset call, crime wiring) are **Small**. We can close the autonomy loop in Round 1. (`ensureTerminal` wiring is now DONE — see §1a and track 1C below; the remaining Round-1 spine is the reset call, BitNode select, and crime wiring.)
 
 ---
 
@@ -77,13 +112,13 @@ Highest leverage, mostly Small. Goal: the brain completes a full prestige cycle 
 
 | Track | Scope | Owner file(s) | Size | Acceptance |
 |---|---|---|---|---|
-| 1A · Reset loop | After `aug_planner --purchase` verifies, call `installAugmentations('/bootstrap.js')` via `ns_dodge`, gated by `autoReset`/decision; handle the reboot | `cross/player_sequencer.ts` | S | dev game: with augs owned + `autoReset` on, brain installs and reboots into bootstrap |
-| 1B · BitNode select | Score BNs, pick next, `destroyW0r1dD43m0n(nextBN, '/bootstrap.js')` via `ns_dodge` gated by `autoBitNode`/decision (SF4 path; no DOM needed) | new `player/bitnode_selector.ts` + sequencer hook | M | with daemon beatable + `autoBitNode` on, brain enters next BN; else surfaces a decision |
-| 1C · ensureTerminal | Call `ensureTerminal()` before every terminal injection | `cross/launcher.ts` | S | injection works regardless of current page (Tier-1) |
+| 1A · Reset loop | After `aug_planner --purchase` verifies, call `installAugmentations('/brain.js')` via `ns_dodge`, gated by `autoReset`/decision; handle the reboot | `cross/player_sequencer.ts` | S | dev game: with augs owned + `autoReset` on, brain installs and reboots into brain.js |
+| 1B · BitNode select | Score BNs, pick next, `destroyW0r1dD43m0n(nextBN, '/brain.js')` via `ns_dodge` gated by `autoBitNode`/decision (SF4 path; no DOM needed) | new `player/bitnode_selector.ts` + sequencer hook | M | with daemon beatable + `autoBitNode` on, brain enters next BN; else surfaces a decision |
+| 1C · ensureTerminal | ~~Call `ensureTerminal()` before every terminal injection~~ **DONE 2026-07-01** — all three `game_agent.ts` injection call sites now go through `runTerminalCommandEnsured` | `cross/launcher.ts`, `cross/game_agent.ts` | S | ✅ injection works regardless of current page (verified via tsc; live-game re-verification still recommended) |
 | 1D · Crime wired | Add `autoCrime` setting + `crime` entry to registry; sequencer launches it; faction_manager falls back to karma grind when idle | `lib/settings.ts`, `lib/manager_registry.ts`, `cross/player_sequencer.ts`, `player/faction_manager.ts` | S | dev game: idle brain commits crime; karma drops |
 | 1E · Script audit pass | Execute the [[13-test-harness-and-script-audit]] §3 matrix under surgical cheats; record PASS/FAIL; file small disjoint fixes; encode §4.3 smoke as a repeatable MCP sequence | `docs/design/13` matrix + tiny fixes | M | every script in the matrix has a PASS or a logged, ticketed FAIL |
 | 1F · Console "offline" | Console shows "⚠ sequencer offline / no producer" when `player_state.json` is stale, instead of silent stale dots | `ui/control_console.tsx`, `ui/panels/subsystems_panel.tsx` | S | with no sequencer running, panels say offline (the exact confusion that started this round) |
-| 1G · Terminal submit | **CONFIRMED bug** (design/13 §8.3): `runTerminalCommand`'s captured `onKeyDown` reads stale React state, so injected commands don't actually submit. Fix via native events / re-fetched handlers. Blast radius = MCP/control + dev path only (the brain uses `ns.exec`), so NOT an autoplay blocker — but it breaks the agent/dev terminal channel | `cross/launcher.ts` | S | injected command runs with no native Enter (Tier-1) |
+| 1G · Terminal submit | ~~**CONFIRMED bug** (design/13 §8.3): `runTerminalCommand`'s captured `onKeyDown` reads stale React state~~ — **ALREADY RESOLVED** by the time of this update: the current `runTerminalCommand` uses the native-value-setter + dispatched `input`/`keydown` events approach (not the old captured-handler approach this gap described), and 1C above additionally wires the ensure-Terminal-first fix into every call path. Blast radius was MCP/control + dev path only (the brain uses `ns.exec`/`requestRun` for daemon launches, not terminal injection) | `cross/launcher.ts` | S | ✅ resolved |
 
 **Sequencing note:** 1A/1B/1D all touch `player_sequencer.ts`. Either one owner does 1A+1B+1D as a coherent solo sub-wave, or freeze a small sequencer seam in Wave-0 and split. 1C/1E/1F are disjoint and fully parallel.
 

@@ -2,7 +2,7 @@ import { NS } from '@ns';
 import { executeCommand } from '../lib/ns_dodge';
 import { isSingleInstance } from '../lib/servers';
 import { findAllPaths } from '../lib/servers';
-import { traverse } from '../lib/connect';
+import { traverse, checkOwnSF } from '../lib/connect';
 
 // ── Program buying constants ──────────────────────────────────────────────────
 
@@ -142,6 +142,11 @@ export async function buyPortOpeners(ns: NS, openersToBuy: string[]): Promise<st
 async function backdoorService(ns: NS): Promise<void> {
     ns.disableLog('ALL');
 
+    if (!checkOwnSF(ns, 4)) {
+        ns.tprint('ERROR: Backdoor service requires SF4 (ns.singularity.connect/installBackdoor) — exiting');
+        return;
+    }
+
     while (true) {
         try {
             const serverPaths     = await findAllPaths(ns);
@@ -153,7 +158,7 @@ async function backdoorService(ns: NS): Promise<void> {
 
             let backdoored = 0;
             for (const target of hackableNow) {
-                if (await installBackdoor(ns, target, serverPaths)) backdoored++;
+                if (await runBackdoorInstall(ns, target, serverPaths)) backdoored++;
             }
 
             if (backdoored > 0) {
@@ -203,8 +208,11 @@ function filterBackdoorReady(ns: NS, servers: string[]): string[] {
     });
 }
 
-/** Connect to and install a backdoor on the target server, then return home. */
-async function installBackdoor(ns: NS, target: string, serverPaths: Map<string, string[]>): Promise<boolean> {
+/** Connect to and install a backdoor on the target server, then return home.
+ *  Named runBackdoorInstall, NOT installBackdoor — that name collides with
+ *  ns.singularity.installBackdoor and the RAM analyzer charges its cost to
+ *  any script defining a same-named local function (see lib/dom.ts header). */
+async function runBackdoorInstall(ns: NS, target: string, serverPaths: Map<string, string[]>): Promise<boolean> {
     try {
         const path = serverPaths.get(target);
         if (!path) {

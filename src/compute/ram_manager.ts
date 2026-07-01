@@ -1,14 +1,13 @@
 import { NS } from '@ns';
 import { findAllServers } from '../lib/servers';
 import {
-    HOME_RAM_RESERVE_FRACTION,
-    HOME_RAM_RESERVE_MAX,
     HOME_RAM_RESERVE_MIN,
     HOME_RAM_USE,
     MIN_SERVER_RAM,
     SCRIPT_PATHS,
     SCRIPT_RAM_COST,
 } from '../lib/config';
+import { getReservedRam } from '../lib/machine_status';
 
 /**
  * RAM management for the distributed hacking botnet.
@@ -37,12 +36,16 @@ export class RamManager {
         this._minHomeReserve = gb;
     }
 
-    /** Compute the effective home RAM reservation from configured percentages and limits. */
+    /**
+     * Effective home RAM reservation, from the shared per-machine budget
+     * (lib/machine_status.ts) with `_minHomeReserve` folded in as a floor
+     * override — this used to be its own copy of the reservation formula.
+     */
     calcHomeReservation(homeMaxRam: number): number {
-        return Math.max(
-            Math.min(homeMaxRam * HOME_RAM_RESERVE_FRACTION, HOME_RAM_RESERVE_MAX),
-            this._minHomeReserve
-        );
+        return getReservedRam(this.ns, 'home', {
+            maxRamOverride: homeMaxRam,
+            floorOverrideGb: this._minHomeReserve,
+        });
     }
 
     /** Refresh RAM snapshot for all servers. Call once per coordination loop tick. */

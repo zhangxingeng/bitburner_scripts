@@ -26,9 +26,18 @@ Everything in Bitburner automation derives from orchestrating **two threads**:
 - **Driven by:** stats *plus* sometimes judgment.
 - **Examples:** working for factions/companies, joining factions, buying programs,
   purchasing & installing augmentations, crime, training, travel.
-- **Automation stance (current phase):** build each as an **invokable module** that the
-  *user triggers*. Scripts compute the optimal action; the human still pulls the trigger
-  until we trust them. Full-auto orchestration comes later.
+- **Automation stance (updated 2026-07-01 — superseded the original "user triggers it"
+  stance below):** `cross/player_sequencer.ts`, launched automatically by `brain.ts`
+  (docs/design/14) once SF4 is available, IS the trigger-puller now — not the human.
+  Autonomy is per-capability-toggleable via `lib/settings.ts`'s `BrainSettings` (default
+  ON for safe/reversible actions like faction-join and program-buying, default OFF for
+  irreversible ones like aug install/reset/BitNode choice — see §2's tiers below, which
+  remain accurate). The *original* stance — "build each as an invokable module the user
+  triggers, full-auto comes later" — described the pre-sequencer state and is no longer
+  how this works; kept below for historical context only.
+  > *Original text:* build each as an **invokable module** that the *user triggers*.
+  > Scripts compute the optimal action; the human still pulls the trigger until we
+  > trust them. Full-auto orchestration comes later.
 
 > The asymmetry — **C is parallel, P is serial** — is *why* they are separate subsystems.
 > C is a scheduler; P is a prioritizer.
@@ -79,13 +88,13 @@ it must:
 3. **Yield or block** — if the script has nothing else useful to do, it waits for the human
    (or for conditions to change) rather than spinning or guessing.
 
-**Open research question (highest priority):** How do existing full-auto scripts actually
-*perform* Player-thread actions?
-- Via the **Singularity API** (clean, but high RAM cost per call)?
-- Via **DOM automation** (clicking real UI buttons — "cheaty window/document")?
-- Via **notify-and-wait**?
-
-The answer decides our entire Thread-P implementation strategy. See research wave.
+**Resolved (see §6 below and [04-player-automation-and-control.md](04-player-automation-and-control.md)
+for the full answer) — kept here for historical context, not as an open question anymore.**
+Original framing: how do existing full-auto scripts actually *perform* Player-thread actions —
+via the Singularity API (clean, high RAM cost), DOM automation ("cheaty window/document"), or
+notify-and-wait? Answer: **all three**, layered — DOM pre-SF4 (`brain.ts`'s acquire branch,
+`player/ui_actions.ts`), Singularity API post-SF4 (`cross/player_sequencer.ts` via `ns_dodge`),
+notify-and-wait for judgment calls (irreversible spends, BitNode choice) regardless of phase.
 
 ---
 

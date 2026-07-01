@@ -16,6 +16,11 @@ import { ThreadDistributionManager } from './scheduler';
 import { FormulaHelper } from './formulas';
 import { Allocator } from './allocator';
 import { execMulti } from './exec_multi';
+import { Priority } from '../lib/config';
+import { getPressure } from '../lib/machine_status';
+
+/** Pressure signals older than this are treated as stale/resolved, not acted on. */
+const PRESSURE_STALE_MS = 10_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -221,8 +226,10 @@ export class BatchHackManager {
         ramManager: RamManager,
         maxTargets: number = 1,
     ): Promise<number> {
-        if (ramManager.isHomeReservationViolated()) {
-            this.ns.print('HOME RAM RESERVATION VIOLATED — reducing batch load');
+        if (ramManager.isHomeReservationViolated() || this.hasHigherTierPressure()) {
+            this.ns.print(ramManager.isHomeReservationViolated()
+                ? 'HOME RAM RESERVATION VIOLATED — reducing batch load'
+                : 'Higher-priority RAM pressure signaled — reducing batch load');
             const terminated = this.reduceActiveBatchLoad(ramManager);
             if (terminated > 0) {
                 this.ns.print(`Terminated ${terminated} batch(es) to free RAM`);
@@ -348,6 +355,18 @@ export class BatchHackManager {
         ].join('\n'));
     }
 
+    /**
+     * Whether a higher-priority tier (BRAIN/ESSENTIAL/INCOME_ENGINE) has a fresh
+     * pressure signal on home — see lib/machine_status.ts. hwgw batch workers are
+     * the lowest (COMPUTE_WORKER) tier, so any such signal means "yield now."
+     */
+    private hasHigherTierPressure(): boolean {
+        const pressure = getPressure(this.ns, 'home');
+        if (!pressure) return false;
+        if (Date.now() - pressure.ts > PRESSURE_STALE_MS) return false;
+        return pressure.priority < Priority.COMPUTE_WORKER;
+    }
+
     private reduceActiveBatchLoad(ramManager: RamManager): number {
         if (this.activeBatches.size === 0) return 0;
 
@@ -357,7 +376,7 @@ export class BatchHackManager {
 
         let terminatedCount = 0;
         for (const target of targets) {
-            if (!ramManager.isHomeReservationViolated()) break;
+            if (!ramManager.isHomeReservationViolated() && !this.hasHigherTierPressure()) break;
 
             const batchCalc = this.activeBatches.get(target);
             if (!batchCalc) continue;

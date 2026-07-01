@@ -1,5 +1,6 @@
 import type { NS } from '@ns';
 import { PORT_PHASE, PORT_HEARTBEAT, PORT_DECISION, PORT_AUGS, pushPort, clearPort, peekPort } from '../lib/ports';
+import { findAllServers, resetCaches } from '../lib/servers';
 import {
     DesignPhase,
     PHASE_RAM_EARLY,
@@ -62,24 +63,6 @@ interface StabilityState {
     consecutiveTicks: number;
 }
 
-// ── BFS (inlined) ─────────────────────────────────────────────────────────────
-
-function bfsAllServers(ns: NS): string[] {
-    const visited = new Set<string>(['home']);
-    const queue   = ['home'];
-    const result: string[] = ['home'];
-    while (queue.length > 0) {
-        for (const neighbor of ns.scan(queue.shift()!)) {
-            if (!visited.has(neighbor)) {
-                visited.add(neighbor);
-                queue.push(neighbor);
-                result.push(neighbor);
-            }
-        }
-    }
-    return result;
-}
-
 // ── Signal snapshot ───────────────────────────────────────────────────────────
 
 function gatherSignals(ns: NS): PhaseSignals {
@@ -98,7 +81,7 @@ function gatherSignals(ns: NS): PhaseSignals {
     let hasNukableServers     = false;
     let unpreparedTargetCount = 0;
 
-    for (const host of bfsAllServers(ns)) {
+    for (const host of findAllServers(ns)) {
         if (host === 'home') continue;
         const sv = ns.getServer(host);
         if (sv.hasAdminRights) {
@@ -209,6 +192,7 @@ export async function main(ns: NS): Promise<void> {
     while (true) {
         tick++;
         const loopStart = Date.now();
+        resetCaches(); // avoid reusing a stale findAllServers() result across ticks
 
         try {
             // Heartbeat — confirms this daemon is alive (boot_agent peeks PORT_HEARTBEAT)

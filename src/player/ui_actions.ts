@@ -11,18 +11,13 @@ import {
 /**
  * UI Actions — SF4-free early game automation via DOM clicks + terminal injection.
  *
- * ## ⚠️  Function naming: avoid ns.* collisions
+ * ⚠️  Function names here (buyHomeRam, buyHomeCores, makeProgram, ...) deliberately
+ * avoid colliding with ns.* API names — see docs/design/15-ram-evasion-rules.md.
  *
- * The Bitburner RAM analyzer looks up ALL function names in the ns API tree.
- * If a function shares a name with an ns API, it incurs that API's RAM cost.
- * Without SF4, Singularity costs are multiplied by 16x:
- *
- *   goToLocation    → ns.singularity.goToLocation = 5×16 = 80 GB  ❌
- *   visitLoc        → no collision  ✅
- *   upgradeHomeRam  → ns.singularity.upgradeHomeRam = 3×16 = 48 GB  ❌
- *   buyHomeRam      → no collision  ✅
- *
- * DO NOT rename these functions to match any ns.* API name.
+ * NOTE: brain.ts (docs/design/14) calls buyTOR/buyAllPortOpeners/buyHomeRam/
+ * takeCourse directly, inline, pre-SF4 — it is NOT launched as a separate
+ * `--early-loop` daemon alongside brain.ts (that would race the same DOM clicks
+ * against brain.ts's own calls). The CLI flags below remain for manual/standalone use.
  *
  * Actions:
  *   --buy-tor          Buy TOR router (City→TechVendor→click Purchase)
@@ -31,13 +26,23 @@ import {
  *   --upgrade-cores    Upgrade home cores once
  *   --study [course]   Take a university course (default: Computer Science)
  *   --create [program] Create a program (may be blocked by isTrusted gate)
- *   --early-loop       Continuous early game loop (TOR → programs → RAM → study)
+ *   --early-loop       Continuous early game loop (TOR → programs → RAM → study);
+ *                      standalone/manual use only, not auto-launched by brain.ts
  */
 
 // ── Tuning ──────────────────────────────────────────────────────────────────────
 
 const TECH_VENDORS = ['Alpha Enterprises', 'ECorp', 'NetLink Technologies', 'Omega Software', 'CompuTek'];
 const UNIVERSITIES = ['Rothman University', 'Summit University', 'ZB Institute of Technology'];
+// Each of the candidates above only exists in one city (../bitburner-src/src/Locations/data/
+// LocationsMetadata.ts) — without SF4 there's no travel logic here, so trying a location outside
+// the player's current city always fails. Filtering avoids spamming "location not found" every
+// acquire tick for the 3-4 candidates that were never reachable in the first place.
+const LOCATION_CITY: Record<string, string> = {
+    'Alpha Enterprises': 'Sector-12', 'ECorp': 'Aevum', 'NetLink Technologies': 'Aevum',
+    'Omega Software': 'Ishima', 'CompuTek': 'Volhaven',
+    'Rothman University': 'Sector-12', 'Summit University': 'Aevum', 'ZB Institute of Technology': 'Volhaven',
+};
 const PORT_OPENERS = ['BruteSSH.exe', 'FTPCrack.exe', 'relaySMTP.exe', 'HTTPWorm.exe', 'SQLInject.exe'];
 const PORT_OPENER_COSTS: Record<string, number> = {
     'BruteSSH.exe': 500_000, 'FTPCrack.exe': 1_500_000,
@@ -54,9 +59,12 @@ function hasTor(ns: NS): boolean {
     return false;
 }
 
-/** Try each candidate location until target button is found. */
+/** Try each candidate location until target button is found. Skips locations in a city the
+ *  player isn't currently in (see LOCATION_CITY) — silently, since that's expected, not an error. */
 async function tryLocations(ns: NS, locations: string[], btnText: string): Promise<boolean> {
-    for (const loc of locations) {
+    const city = ns.getPlayer().city;
+    const reachable = locations.filter(loc => LOCATION_CITY[loc] === undefined || LOCATION_CITY[loc] === city);
+    for (const loc of reachable) {
         if (!visitLoc(loc)) { ns.print(`[ui] location not found: ${loc}`); continue; }
         // waitForBtn is inlined here — it needs ns.sleep
         const dl = Date.now() + 2500;
@@ -77,6 +85,9 @@ async function tryLocations(ns: NS, locations: string[], btnText: string): Promi
 
 export async function buyTOR(ns: NS): Promise<boolean> {
     if (hasTor(ns)) { ns.print('[ui] TOR already owned'); return true; }
+    // Pre-check affordability so an unaffordable attempt doesn't still flip the visible page to
+    // City every acquire tick (visitLoc always navigates there first) for nothing.
+    if (ns.getServerMoneyAvailable('home') < TOR_COST) return false;
     ns.print(`[ui] Buying TOR router ($${TOR_COST.toLocaleString()})...`);
     return tryLocations(ns, TECH_VENDORS, 'Purchase TOR router');
 }
@@ -101,9 +112,22 @@ export async function buyAllPortOpeners(ns: NS): Promise<number> {
     return n;
 }
 
+// Mirrors Player.getUpgradeHomeRamCost (../bitburner-src/src/PersonObjects/Player/
+// PlayerObjectServerMethods.ts) — that's a Singularity-gated call, so this stays a plain-JS
+// estimate (0 GB, no ns.* call) purely to skip a pointless City-page navigation when we
+// already know we can't afford it. Assumes the BitNode HomeComputerRamCost multiplier is 1
+// (true outside a few late-game BitNodes) — worst case we under/over-estimate by that factor
+// and skip or attempt one cycle later than ideal, never a wrong purchase.
+function estimateHomeRamCost(currentRam: number): number {
+    const numUpgrades = Math.log2(currentRam);
+    const mult = Math.pow(1.58, numUpgrades);
+    return currentRam * 32_000 * mult;
+}
+
 // Named buyHomeRam (not upgradeHomeRam) to avoid ns.singularity.upgradeHomeRam collision (48 GB)
 export async function buyHomeRam(ns: NS): Promise<boolean> {
     const cur = ns.getServerMaxRam('home');
+    if (ns.getServerMoneyAvailable('home') < estimateHomeRamCost(cur)) return false;
     ns.print(`[ui] Upgrading home RAM (currently ${cur}GB)...`);
     return tryLocations(ns, TECH_VENDORS, "Upgrade 'home' RAM");
 }
@@ -115,8 +139,32 @@ export async function buyHomeCores(ns: NS): Promise<boolean> {
 }
 
 export async function takeCourse(ns: NS, course = 'Computer Science'): Promise<boolean> {
+    // Clicking a course button always calls Player.startWork on a NEW ClassWork, which
+    // finishes (and dialog-pops) whatever class was already running (PlayerObjectWorkMethods.ts
+    // startWork -> currentWork.finish(true)) — re-clicking every acquire tick would restart
+    // the class from zero and spam a popup every cycle. "Stop taking course" only renders
+    // on the Work-in-progress screen while a class is active (WorkInProgressRoot.tsx) — no
+    // Singularity call needed, so this stays SF4-free like the rest of this file.
+    if (findAnyButton('Stop taking course')) { ns.print('[ui] already studying'); return true; }
     ns.print(`[ui] Taking ${course}...`);
     return tryLocations(ns, UNIVERSITIES, course);
+}
+
+/**
+ * Re-focus on work that's still running unfocused. Navigating to any other page while working
+ * auto-unfocuses (GameRoot.tsx: leaving Page.Work calls Player.stopFocusing()) without cancelling
+ * the work — every acquire-cycle purchase attempt does exactly this navigation, so without this,
+ * a study session loses its focus bonus for good the first time brain.ts goes to buy something.
+ * The "Focus" button (CharacterOverview.tsx's WorkInProgressOverview, visible on any page while
+ * unfocused work is active) calls Player.startFocusing() only — it never touches currentWork, so
+ * clicking it is always safe, unlike re-clicking the course/job button itself.
+ */
+export async function resumeFocus(ns: NS): Promise<boolean> {
+    const btn = findAnyButton('Focus');
+    if (!btn) return false;
+    clickEl(btn);
+    ns.print('[ui] resumed focus');
+    return true;
 }
 
 // Named makeProgram (not createProgram) to avoid ns.singularity.createProgram collision (80 GB)

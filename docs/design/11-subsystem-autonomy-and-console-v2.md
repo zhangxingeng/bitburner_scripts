@@ -23,7 +23,7 @@ The themes are interdependent, so a flat fan-out would collide:
 
 ## §2 Inventory (recon 2026-06-30)
 
-**Already autonomous:** compute (hacknet_manager, pserv, coordinator/HWGW batcher), stock engine (`stock/main.js`) — both auto-launched by `bootstrap.ts` via `DAEMON_CATALOG`, phase-gated, no settings toggle. Player: faction_manager, program_acquirer, aug_planner (all wired into player_sequencer); contract_solver **exists but is NOT wired** (`autoSolveContracts` toggle exists, default false, unused).
+**Already autonomous:** compute (hacknet_manager, pserv, coordinator/HWGW batcher), stock engine (`stock/main.js`) — both auto-launched by `brain.ts` via `lib/daemon_launcher.ts`'s `DAEMON_CATALOG` walk (updated 2026-07-01; was `bootstrap.ts`, since deleted — see [[14-roadmap-to-full-autoplay]] §1a), phase-gated, no settings toggle. Player: faction_manager, program_acquirer, aug_planner (all wired into player_sequencer); contract_solver **exists but is NOT wired** (`autoSolveContracts` toggle exists, default false, unused).
 
 **Missing managers:** gang, corporation, bladeburner, sleeve, stanek, grafting.
 

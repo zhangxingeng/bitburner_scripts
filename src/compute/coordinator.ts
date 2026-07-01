@@ -7,8 +7,6 @@ import {
     SCRIPT_RAM_COST,
     MIN_SERVER_RAM,
     HOME_RAM_RESERVE_FRACTION,
-    HOME_RAM_RESERVE_MAX,
-    HOME_RAM_RESERVE_MIN,
     TARGET_MONEY_THRESHOLD,
     TARGET_SECURITY_THRESHOLD,
     MAX_TARGETS,
@@ -19,6 +17,7 @@ import {
     INTERVAL_PORT_OPENER_S,
     INTERVAL_SHARE_S,
 } from '../lib/config';
+import { getReservedRam } from '../lib/machine_status';
 import { PORT_PHASE, PORT_DECISION, peekPort, pushPort } from '../lib/ports';
 import { RamManager } from './ram_manager';
 import { TargetSelector, isServerPrepared, getTargetServers } from './target_selector';
@@ -27,8 +26,8 @@ import { ThreadDistributionManager } from './scheduler';
 import { execMulti } from './exec_multi';
 
 // NOTE: daemon lifecycle (spreader, hacknetManager, phaseDetector, bootAgent,
-// pservManager, gameAgent, stockEngine, and this coordinator itself) is now owned
-// entirely by the lean orchestrator in `bootstrap.ts`.  Coordinator is a pure
+// pservManager, gameAgent, stockEngine, and this coordinator itself) is owned
+// entirely by brain.ts via lib/daemon_launcher.ts.  Coordinator is a pure
 // batch engine: it is launched by the orchestrator at MID phase and does NOT
 // spawn or respawn any infrastructure daemons.
 
@@ -84,17 +83,6 @@ export function formatBatchInfoPanel(
     return createStatusPanel('BATCH INFO', rows);
 }
 
-// ── Compute the effective home RAM reservation ────────────────────────────────
-
-function calcHomeRamReservation(ns: NS, minOverride?: number): number {
-    const homeMaxRam = ns.getServerMaxRam('home');
-    const minReserve = minOverride ?? HOME_RAM_RESERVE_MIN;
-    return Math.max(
-        Math.min(homeMaxRam * HOME_RAM_RESERVE_FRACTION, HOME_RAM_RESERVE_MAX),
-        minReserve,
-    );
-}
-
 // ── Maintenance helpers ───────────────────────────────────────────────────────
 
 async function nukeAll(ns: NS): Promise<void> {
@@ -128,7 +116,9 @@ async function prepareServers(
     for (const target of unprepared) {
         for (let i = 0; i < Math.min(3, availableServers.length); i++) {
             const host = availableServers[(serverIndex + i) % availableServers.length];
-            const freeRam = ns.getServerMaxRam(host) - ns.getServerUsedRam(host);
+            // Home carries a reservation (lib/machine_status.ts); other hosts don't.
+            const reserve = host === 'home' ? getReservedRam(ns, 'home') : 0;
+            const freeRam = Math.max(0, ns.getServerMaxRam(host) - ns.getServerUsedRam(host) - reserve);
             const autoGrowRam = ns.getScriptRam(SCRIPT_PATHS.autoGrow);
             const threads = Math.floor(freeRam / autoGrowRam / 2);
             if (threads > 0) execMulti(ns, host, threads, SCRIPT_PATHS.autoGrow, target);
@@ -219,10 +209,10 @@ export async function main(ns: NS): Promise<void> {
 
     const batchManager = new BatchHackManager(ns, threadManager);
 
-    // Initial nuke pass (all daemon lifecycle is owned by bootstrap.ts orchestrator)
+    // Initial nuke pass (all daemon lifecycle is owned by brain.ts (lib/daemon_launcher.ts))
     await nukeAll(ns);
 
-    ns.print('Coordinator (batch engine) started — daemon lifecycle owned by bootstrap.ts orchestrator');
+    ns.print('Coordinator (batch engine) started — daemon lifecycle owned by brain.ts');
 
     let tick = 0;
     let lastNukeTime        = 0;
@@ -258,7 +248,7 @@ export async function main(ns: NS): Promise<void> {
 
             // ── Periodic maintenance ──────────────────────────────────────────
             // Daemon lifecycle (phaseDetector, stockEngine, pservManager, etc.) is
-            // owned by the bootstrap.ts orchestrator — coordinator does NOT respawn them.
+            // owned by brain.ts (lib/daemon_launcher.ts) — coordinator does NOT respawn them.
             if (sec - lastNukeTime >= INTERVAL_NUKE_S) {
                 await nukeAll(ns);
                 lastNukeTime = sec;
@@ -269,7 +259,9 @@ export async function main(ns: NS): Promise<void> {
             }
 
             // ── RAM snapshot ─────────────────────────────────────────────────
-            const homeReserved = calcHomeRamReservation(ns, homeRamOverride > 0 ? homeRamOverride : undefined);
+            const homeReserved = getReservedRam(ns, 'home', {
+                floorOverrideGb: homeRamOverride > 0 ? homeRamOverride : undefined,
+            });
             const { servers: availServers } = getAvailableServers(ns, MIN_SERVER_RAM, true, homeReserved);
 
             const totalRam  = availServers.reduce((s, h) => s + ns.getServerMaxRam(h), 0);

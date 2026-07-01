@@ -6,6 +6,28 @@
 
 ---
 
+## 0. Scope: this is dev/debug tooling, not part of gameplay (added 2026-07-01)
+
+**Everything in this document — the MCP tools, `build/game-bridge.ts`, `cross/game_agent.ts`'s
+control channel, `cross/boot_agent.ts` — exists so a developer (or an AI coding agent) can push
+code, inspect state, and debug the running game from outside it. None of it is a runtime
+dependency of autonomous gameplay.**
+
+`src/brain.ts` (docs/design/14) is the single entry point for actually playing the game. It makes
+every decision and performs every action on its own, with **zero dependency on any MCP tool, the
+bridge process, or a connected control channel** — it must keep running correctly whether or not
+this whole apparatus is even started. If you find yourself making `brain.ts` (or anything it
+launches via `DAEMON_CATALOG`) call an MCP tool, read a bridge-owned status file as a *decision
+input*, or otherwise behave differently based on whether a dev session is attached, that's a
+layering violation — back it out.
+
+The one narrow exception: `cross/game_agent.ts` mirrors state to `status/*` files and the control
+channel for **observability** (so a dev session can watch what the brain is doing), and its
+double-spawn guards keep it safe to run alongside the brain without interfering. It never makes
+brain-side decisions and the brain never blocks waiting on it.
+
+---
+
 ## 1. What this is
 
 A real-time control surface between the MCP server (what an agent calls) and the running game. It gives
@@ -60,10 +82,25 @@ without doing file I/O at 100 Hz.
 
 ## 3. Bringing it up
 
+**Two independent entry points, two independent prerequisites — don't confuse them:**
+
+| | To play the game | To get MCP dev/debug access |
+|---|---|---|
+| Run | `run /brain.js` | `run /cross/game_agent.js` |
+| Needs the other running? | No — `brain.js` needs nothing from `game_agent.js` or MCP | No — `game_agent.js` only imports `launcher`/`ports`/`decisions`, never `brain.ts` |
+
+In practice `brain.js` auto-launches `game_agent.js` for you once phase ≥ EARLY (it's an `ESSENTIAL`-tier
+`DAEMON_CATALOG` entry, for observability) — so if `brain.js` is already running you usually don't need
+to run `game_agent.js` yourself. But if you want MCP access *before* `brain.js` reaches that phase, or
+*without* running `brain.js` at all (e.g. debugging a single script in isolation), start it manually:
+
 1. **Bridge** (`build/game-bridge.ts`): run with `pnpm run watch` (also does `tsc -w` + dist sync), or
    standalone `tsx build/game-bridge.ts`. It must log all three servers, including `:12527`.
 2. **Game**: in the Bitburner terminal, `run /cross/game_agent.js` (single instance, ~8 GB on home).
-   `get_status` should then show `controlConnected: true`.
+   `get_status` should then show `controlConnected: true`. On a completely cold game (nothing running
+   yet), this first `run` command must be typed by the user directly in the game window — the MCP
+   `terminal` tool's fallback path itself relays through `game_agent.js`, so there's nothing yet to
+   relay through until it's started at least once.
 3. **MCP server**: launched by Claude Code via `.mcp.json`. Tool changes need a session/`/mcp` reload.
 
 ### Deploying a code change to the agent

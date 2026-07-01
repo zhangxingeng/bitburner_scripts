@@ -1,256 +1,154 @@
 import type { NS } from '@ns';
+import { executeCommand } from './lib/ns_dodge';
+import { buyTOR, buyAllPortOpeners, buyHomeRam, takeCourse, resumeFocus } from './player/ui_actions';
 import {
-    findButton,
-    findAnyButton,
-    clickEl,
-    clickButton,
-    navToPage,
-    visitLoc,
-    terminalCmd,
-} from './lib/dom';
+    currentPhase,
+    freeHomeRam,
+    nukeAndScan,
+    pickTarget,
+    deployWorkers,
+    launchEligibleDaemons,
+} from './lib/daemon_launcher';
+import { ensureDefaultBudget } from './lib/machine_status';
+import { SCRIPT_PATHS } from './lib/config';
 
 /**
- * BRAIN — single-entry autonomous game runner.
+ * BRAIN — the single entry point (docs/design/14).
  *
- * Launch:  run /brain.js
+ * `run /brain.js` is the only thing the user types on a fresh game or after a
+ * reset. Everything else is orchestrated from here, dynamically, every tick —
+ * there is no second "run this at game start" script (bootstrap.ts's old role
+ * is now a library this file calls, not a competing entry point).
  *
- * DOM utilities imported from lib/dom.ts (zero ns.* cost).  Function names
- * deliberately avoid ns.* API collisions (see lib/dom.ts for details).
+ * Per-tick responsibilities:
+ *   1. Keep the network rooted and spray leftover RAM on non-home servers
+ *      while the compute stack (coordinator.ts) isn't up yet — bootstrap.ts's
+ *      old job, now via lib/daemon_launcher.ts.
+ *   2. Walk DAEMON_CATALOG and launch anything eligible — budget/priority-aware
+ *      via lib/exec_guard.ts's requestRun, which every daemon launch now goes
+ *      through instead of a bare ns.exec.
+ *   3. Pre-SF4 only: mimic human UI actions directly (buy TOR, port openers,
+ *      home RAM, a free course) via player/ui_actions.ts's exported actions —
+ *      no separate process needed, these are just clicks/keystrokes. Once SF4
+ *      is detected this stops entirely; cross/player_sequencer.ts (already in
+ *      DAEMON_CATALOG at EARLY phase) takes over TOR/program purchasing via
+ *      the Singularity API from then on, so there is never more than one
+ *      purchaser running at a time.
  *
- * Priority loop:
- *   1. EARN  — pick best target, prep + hack; manage hacknet
- *   2. ACQUIRE — TOR (DOM click) → programs (terminal buy) → RAM (DOM click)
- *   3. EXPAND — nuke servers as programs unlock
- *   4. LEARN — take free CS course when hack level < 100
+ * brain.ts deliberately does NOT hack/grow/weaken or manage hacknet inline —
+ * that's workers/early_prepper.ts and compute/hacknet_manager.ts's job, both
+ * launched via the catalog like everything else. brain.ts decides WHAT should
+ * be running and enforces the RAM budget; it doesn't do the work itself.
+ *
+ * MCP (mcp__bitburner__*, game-bridge.ts, game_agent.ts's control channel,
+ * boot_agent.ts) is dev/debug tooling only — brain.ts has zero runtime
+ * dependency on any of it being connected.
  */
 
 // ── Tuning ──────────────────────────────────────────────────────────────────────
 
-const LOOP_MS           = 200;
-const TARGET_RESCAN     = 25;
-const HACKNET_TICKS     = 10;
-
-const TOR_COST          = 200_000;
-const OPENERS = ['BruteSSH.exe', 'FTPCrack.exe', 'relaySMTP.exe', 'HTTPWorm.exe', 'SQLInject.exe'];
-const OPENER_COST: Record<string, number> = {
-    'BruteSSH.exe': 500_000, 'FTPCrack.exe': 1_500_000,
-    'relaySMTP.exe': 5_000_000, 'HTTPWorm.exe': 30_000_000, 'SQLInject.exe': 250_000_000,
-};
-const TECH_VENDORS = ['Alpha Enterprises', 'ECorp', 'NetLink Technologies', 'Omega Software', 'CompuTek'];
-const UNIVERSITIES = ['Rothman University', 'Summit University', 'ZB Institute of Technology'];
+const LOOP_MS = 200;
+/** Network BFS/nuke + worker spray + daemon-catalog walk cadence (~2s at 200ms —
+ *  matches the old bootstrap.ts's own 2000ms loop; no need to run 10x more often). */
+const NETWORK_MAINTENANCE_TICKS = 10;
+/** Re-check SF4 every ~5 min once absent (mirrors player_sequencer's own cadence). */
+const SF4_RECHECK_TICKS = 1500;
+/** Pre-SF4 acquire-action cadence (~5s — mirrors ui_actions.ts's own earlyLoop). */
+const ACQUIRE_TICKS = 25;
+/** Status print cadence (~50s). */
+const STATUS_TICKS = 250;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
 
-function hasTor(ns: NS): boolean {
-    try { if (ns.hasTorRouter()) return true; } catch { /* nop */ }
-    try { if (ns.scan('home').includes('darkweb')) return true; } catch { /* nop */ }
-    return false;
-}
-
-function owns(ns: NS, file: string): boolean {
-    try { return ns.fileExists(file, 'home'); } catch { return false; }
-}
-
-function scanAll(ns: NS): string[] {
-    const visited = new Set<string>(['home']);
-    const queue = ['home'];
-    const result: string[] = ['home'];
-    while (queue.length > 0) {
-        for (const n of ns.scan(queue.shift()!)) {
-            if (!visited.has(n)) { visited.add(n); queue.push(n); result.push(n); }
-        }
-    }
-    return result;
-}
-
-// ── Target selection ──────────────────────────────────────────────────────────
-
-function pickBest(ns: NS): string {
-    const hl = ns.getPlayer().skills.hacking;
-    let best = '';
-    let bestScore = -1;
-    for (const host of scanAll(ns)) {
-        if (host === 'home') continue;
-        try {
-            const sv = ns.getServer(host);
-            if (!sv.hasAdminRights) continue;
-            if ((sv.moneyMax ?? 0) <= 0) continue;
-            if ((sv.requiredHackingSkill ?? Infinity) > hl) continue;
-            const ch = ns.hackAnalyzeChance(host);
-            if (ch < 0.3) continue;
-            const score = (sv.moneyMax ?? 0) * ns.hackAnalyze(host) * ch;
-            if (score > bestScore) { bestScore = score; best = host; }
-        } catch { /* skip */ }
-    }
-    return best || 'n00dles';
-}
-
-function needsW(ns: NS, h: string): boolean {
-    const s = ns.getServer(h);
-    return (s.hackDifficulty ?? 99) > (s.minDifficulty ?? 1) * 1.05;
-}
-function needsG(ns: NS, h: string): boolean {
-    const s = ns.getServer(h);
-    return (s.moneyAvailable ?? 0) < (s.moneyMax ?? 1) * 0.90;
-}
-function prepped(ns: NS, h: string): boolean {
-    const s = ns.getServer(h);
-    return (s.hackDifficulty ?? 99) <= (s.minDifficulty ?? 1) * 1.05 &&
-        (s.moneyAvailable ?? 0) >= (s.moneyMax ?? 1) * 0.95;
-}
-
-// ── Hacknet ────────────────────────────────────────────────────────────────────
-
-function manageHacknet(ns: NS): void {
-    try {
-        const num = ns.hacknet.numNodes();
-        const max = ns.hacknet.maxNumNodes();
-        const money = ns.getServerMoneyAvailable('home');
-        if (num < max && ns.hacknet.getPurchaseNodeCost() < money * 0.05) {
-            ns.hacknet.purchaseNode();
-            return;
-        }
-        let best = { node: -1, type: '', cost: Infinity, gain: 0 };
-        for (let i = 0; i < num; i++) {
-            const st = ns.hacknet.getNodeStats(i);
-            const p = st.production;
-            const lc = ns.hacknet.getLevelUpgradeCost(i, 1);
-            if (lc < money * 0.05 && p / st.level / lc > best.gain) best = { node: i, type: 'level', cost: lc, gain: p / st.level / lc };
-            const rc = ns.hacknet.getRamUpgradeCost(i, 1);
-            if (rc < money * 0.05 && p * 0.07 / rc > best.gain) best = { node: i, type: 'ram', cost: rc, gain: p * 0.07 / rc };
-            const cc = ns.hacknet.getCoreUpgradeCost(i, 1);
-            if (cc < money * 0.05 && p / (st.cores + 1) / cc > best.gain) best = { node: i, type: 'cores', cost: cc, gain: p / (st.cores + 1) / cc };
-        }
-        if (best.node >= 0) {
-            if (best.type === 'level') ns.hacknet.upgradeLevel(best.node, 1);
-            else if (best.type === 'ram') ns.hacknet.upgradeRam(best.node, 1);
-            else if (best.type === 'cores') ns.hacknet.upgradeCore(best.node, 1);
-        }
-    } catch { /* skip */ }
-}
-
-// ── Nuke ────────────────────────────────────────────────────────────────────────
-
-function nukeAll(ns: NS): number {
-    const ops: Array<(h: string) => void> = [];
-    if (owns(ns, 'BruteSSH.exe')) ops.push(h => ns.brutessh(h));
-    if (owns(ns, 'FTPCrack.exe')) ops.push(h => ns.ftpcrack(h));
-    if (owns(ns, 'relaySMTP.exe')) ops.push(h => ns.relaysmtp(h));
-    if (owns(ns, 'HTTPWorm.exe')) ops.push(h => ns.httpworm(h));
-    if (owns(ns, 'SQLInject.exe')) ops.push(h => ns.sqlinject(h));
-    const seen = new Set<string>();
-    const q = ['home'];
-    let rooted = 0;
-    while (q.length) {
-        const h = q.shift()!;
-        if (seen.has(h)) continue;
-        seen.add(h);
-        if (h !== 'home' && !ns.hasRootAccess(h)) {
-            for (const o of ops) try { o(h); } catch { /* */ }
-            try { ns.nuke(h); } catch { /* */ }
-        }
-        if (ns.hasRootAccess(h)) rooted++;
-        for (const n of ns.scan(h)) if (!seen.has(n)) q.push(n);
-    }
-    return rooted;
-}
-
-/** Wait for a button to appear, using ns.sleep for polling. */
-async function waitForBtn(ns: NS, text: string, ms = 2000): Promise<HTMLElement | null> {
-    const dl = Date.now() + ms;
-    while (Date.now() < dl) {
-        const b = findButton(text);
-        if (b) return b;
-        if (findAnyButton(text)) return null;
-        await ns.sleep(100);
-    }
-    return null;
+/**
+ * Check whether the player owns Source-File 4 (Singularity).
+ * Runs the check inside a temp dodger script so the 16 GB Singularity cost
+ * (getOwnedSourceFiles is SF4Cost-gated — see lib/dom.ts's header) is paid by
+ * the dodger, not by this script. Same pattern as cross/player_sequencer.ts.
+ */
+async function checkSf4(ns: NS): Promise<boolean> {
+    const result = await executeCommand<boolean>(
+        ns, 'ns.singularity.getOwnedSourceFiles().some(sf => sf.n === 4)',
+    );
+    return result === true;
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
-    ns.tprint('BRAIN started — single-entry autonomous runner (no SF4 needed)');
+    ns.tprint('BRAIN started — single entry point (docs/design/14)');
     ns.ui.openTail();
 
+    ensureDefaultBudget(ns, 'home');
+
+    let sf4 = await checkSf4(ns);
+    ns.print(sf4
+        ? 'SF4 detected — purchases deferred to cross/player_sequencer.js'
+        : 'No SF4 yet — driving early-game purchases directly via DOM/terminal');
+
+    // Studying is NOT idempotent like buyTOR/buyAllPortOpeners/buyHomeRam: clicking the
+    // course button always starts a NEW ClassWork, which finishes (and dialog-pops) whatever
+    // class is already running (Player.startWork -> currentWork.finish(true) in the game's
+    // PlayerObjectWorkMethods.ts). A DOM re-check (e.g. "is the Stop-taking-course button
+    // present") is unreliable here because buyTOR/buyAllPortOpeners/buyHomeRam navigate to a
+    // TechVendor page earlier in this SAME tick whenever they're not yet satisfied — so by the
+    // time we'd check, we're never still on the Work page. Track it ourselves instead: once
+    // started, never call takeCourse again for the rest of this process's life.
+    let studyingStarted = false;
+
     let tick = 0;
-    let target = 'n00dles';
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
         tick++;
         const t0 = Date.now();
         try {
-            const player  = ns.getPlayer();
-            const homeRam = ns.getServerMaxRam('home');
-            const freeRam = homeRam - ns.getServerUsedRam('home');
-            const money   = player.money;
-            const hackLvl = player.skills.hacking;
-            const tor     = hasTor(ns);
-            const owned   = OPENERS.filter(f => owns(ns, f)).length;
-            const missing = OPENERS.filter(f => !owns(ns, f));
+            const phase = currentPhase(ns);
 
-            // ── EARN — hack best target + hacknet ─────────────────────────────
-            if (tick % TARGET_RESCAN === 0) target = pickBest(ns);
+            // ── Network maintenance + daemon orchestration (~2s cadence) ─────
+            if (tick % NETWORK_MAINTENANCE_TICKS === 0) {
+                const rooted = nukeAndScan(ns);
+                const target = pickTarget(ns, rooted);
 
-            if (!prepped(ns, target)) {
-                if (needsW(ns, target)) await ns.weaken(target);
-                else if (needsG(ns, target)) await ns.grow(target);
-            } else {
-                if (ns.hackAnalyzeChance(target) >= 0.3) await ns.hack(target);
-                if (needsW(ns, target)) await ns.weaken(target);
-                if (needsG(ns, target)) await ns.grow(target);
-            }
-
-            if (tick % HACKNET_TICKS === 0) manageHacknet(ns);
-
-            // ── ACQUIRE — TOR → programs → RAM ───────────────────────────────
-            if (!tor && money >= TOR_COST) {
-                ns.print('[brain] Buying TOR...');
-                for (const v of TECH_VENDORS) {
-                    if (!visitLoc(v)) continue;
-                    const btn = await waitForBtn(ns, 'Purchase TOR router', 2000);
-                    if (btn) { clickEl(btn); ns.print('[brain] TOR purchased'); break; }
+                // Spray leftover RAM on remote servers only while the HWGW batch
+                // engine (coordinator.ts) hasn't taken over yet — same rule as
+                // the old bootstrap.ts.
+                const coordinatorRunning = ns.ps('home').some(p => p.filename === SCRIPT_PATHS.coordinator);
+                if (!coordinatorRunning) {
+                    const worker = SCRIPT_PATHS.simpleHackLoop;
+                    const workerRam = ns.getScriptRam(worker);
+                    if (freeHomeRam(ns) > workerRam) deployWorkers(ns, rooted, worker, workerRam, target);
                 }
+
+                await launchEligibleDaemons(ns, phase, freeHomeRam(ns));
             }
 
-            if (tor && missing.length > 0 && tick % 5 === 0) {
-                const next = missing[0];
-                if (money >= (OPENER_COST[next] ?? 0)) {
-                    ns.print(`[brain] Buying ${next}...`);
-                    terminalCmd(`buy ${next}`);
-                    await ns.sleep(300);
+            // ── SF4 re-check (rare) ───────────────────────────────────────────
+            if (!sf4 && tick % SF4_RECHECK_TICKS === 0) {
+                sf4 = await checkSf4(ns);
+                if (sf4) ns.print('SF4 now detected — handing purchases to player_sequencer.js');
+            }
+
+            // ── Pre-SF4 acquire: mimic human UI actions directly ──────────────
+            if (!sf4 && tick % ACQUIRE_TICKS === 0) {
+                const player = ns.getPlayer();
+                await buyTOR(ns);
+                await buyAllPortOpeners(ns);
+                if (ns.getServerMaxRam('home') < 64) await buyHomeRam(ns);
+                if (!studyingStarted && player.skills.hacking < 100) {
+                    studyingStarted = await takeCourse(ns);
                 }
+                // The purchase attempts above navigate off the Work page, which auto-unfocuses
+                // (see ui_actions.ts::resumeFocus) without cancelling the class — reclaim the
+                // focus bonus every cycle instead of leaving study running unfocused forever.
+                if (studyingStarted) await resumeFocus(ns);
             }
 
-            if (homeRam < 64 && tick % 30 === 0) {
-                ns.print(`[brain] Upgrading RAM (${homeRam}GB)...`);
-                for (const v of TECH_VENDORS) {
-                    if (!visitLoc(v)) continue;
-                    const btn = await waitForBtn(ns, "Upgrade 'home' RAM", 2000);
-                    if (btn) { clickEl(btn); ns.print('[brain] RAM upgraded'); break; }
-                }
-            }
-
-            // ── LEARN — free CS course ────────────────────────────────────────
-            if (hackLvl < 100 && tick % 50 === 0) {
-                for (const uni of UNIVERSITIES) {
-                    if (!visitLoc(uni)) continue;
-                    const btn = await waitForBtn(ns, 'Computer Science', 1500);
-                    if (btn) { clickEl(btn); break; }
-                }
-            }
-
-            // ── EXPAND — nuke network ─────────────────────────────────────────
-            if (tick % 15 === 0) {
-                const n = nukeAll(ns);
-                if (tick % 60 === 0) ns.print(`[brain] Rooted: ${n} servers`);
-            }
-
-            // ── Status ────────────────────────────────────────────────────────
-            if (tick % 50 === 0) {
-                ns.print(`[brain] RAM=${homeRam}G free=${freeRam.toFixed(0)}G $${money.toLocaleString()} hack=${hackLvl} TOR=${tor} pgms=${owned}/${OPENERS.length}`);
+            // ── Status ─────────────────────────────────────────────────────────
+            if (tick % STATUS_TICKS === 0) {
+                ns.print(`[brain] phase=${phase} home=${ns.getServerMaxRam('home')}GB ` +
+                    `free=${freeHomeRam(ns).toFixed(0)}GB sf4=${sf4}`);
             }
         } catch (err) {
             ns.print(`[brain] ERROR: ${String(err)}`);
