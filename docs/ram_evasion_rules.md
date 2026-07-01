@@ -123,3 +123,37 @@ importing shared utility modules at all, accepting a little code duplication (a
 ~12-line BFS scan, also present in `cross/phase_detector.ts` before it was
 consolidated onto `lib/servers.ts::findAllServers`) in exchange for a predictable,
 minimal per-thread RAM cost.
+
+---
+
+## 5. `lib/net_scan.ts` vs `lib/servers.ts` split (2026-07-01)
+
+`lib/servers.ts` used to bundle pure network topology (`findAllServers`,
+`isSingleInstance`, `getPaths`, …) together with hack-formula server scoring
+(`calculateServerValue`, plus now-deleted dead code `calculateWeakenThreads`/
+`calculateGrowThreads`/`calculateHackThreads`/`getHackableServers`). Every
+importer — even one that only wanted `isSingleInstance` — paid for
+`hackAnalyzeChance` (1 GB) + `getHackTime`/`getServerGrowth`/
+`getServerMinSecurityLevel`/`getServerMaxMoney` (~0.35 GB) on top of the dead
+functions' `weakenAnalyze`/`growthAnalyze`/`hackAnalyze` (1 GB each) — call it
+≥5 GB of invisible tax per importer, for functionality most of them never used.
+
+Fix: pure topology moved to `lib/net_scan.ts` (`ns.scan`/`ns.ps`/
+`ns.hasRootAccess`/`ns.getHostname`/`ns.getServerMaxRam`/`ns.getServerUsedRam`
+only — ~0.6 GB flat). `lib/servers.ts` now re-exports everything from
+`net_scan.ts` plus keeps only `calculateServerValue` (its one remaining
+consumer, `compute/target_selector.ts`, already needs the heavier cost).
+**Import from `lib/net_scan.ts` directly** unless you specifically need
+`calculateServerValue` — importing the `lib/servers.ts` barrel still pulls in
+its RAM cost even via re-export, since the analyzer walks the whole file.
+
+**Still-intentional exceptions — do NOT redirect these to `lib/net_scan.ts`:**
+scripts that already hand-roll a *trivial, ns.scan-only* BFS inline
+(`player/contract_solver.ts`, `player/contract_manager.ts`, `cross/reporter.ts`,
+`workers/early_prepper.ts`) cost strictly less by staying self-contained —
+`net_scan.ts`'s ~0.6 GB flat bundle is a regression for a consumer whose own
+inline scan only ever cost `ns.scan` (0.2 GB) alone. Same logic protects
+`lib/daemon_launcher.ts::nukeAndScan`, which is transitively imported by
+`brain.ts` (BRAIN tier, never yields — the single most RAM-sensitive script in
+the system) and deliberately keeps its own inline BFS rather than importing
+either module.

@@ -1,7 +1,6 @@
 import { NS } from '@ns';
 import { executeCommand } from '../lib/ns_dodge';
-import { isSingleInstance } from '../lib/servers';
-import { findAllPaths } from '../lib/servers';
+import { isSingleInstance, findAllPaths } from '../lib/net_scan';
 import { traverse, checkOwnSF } from '../lib/connect';
 
 // ── Program buying constants ──────────────────────────────────────────────────

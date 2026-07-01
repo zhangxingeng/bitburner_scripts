@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { getPaths } from '../lib/servers';
+import { getPaths } from '../lib/net_scan';
 import { traverse } from '../lib/connect';
 
 

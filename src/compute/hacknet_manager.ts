@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { isSingleInstance } from '../lib/servers';
+import { isSingleInstance } from '../lib/net_scan';
 
 // TODO(design): Wire MAX_PAYOFF_TIME to lib/config phase boundaries:
 //   BOOTSTRAP phase → aggressive (1h limit, no cap); MID/LATE → conservative (4h, 1% money cap).

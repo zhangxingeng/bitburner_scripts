@@ -3,7 +3,7 @@ import { formatMoney } from '../lib/format';
 import { StockConfig } from './config';
 import { StockMarket } from './market';
 import { StockTrader } from './trader';
-import { isSingleInstance } from '../lib/servers';
+import { isSingleInstance } from '../lib/net_scan';
 import { PORT_STOCK, pushPort, clearPort } from '../lib/ports';
 
 // For HUD display

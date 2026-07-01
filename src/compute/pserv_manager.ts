@@ -1,6 +1,6 @@
 import { NS } from '@ns';
 import { formatRam, padNum } from '../lib/format';
-import { isSingleInstance } from '../lib/servers';
+import { isSingleInstance } from '../lib/net_scan';
 import { executeCommand } from '../lib/ns_dodge';
 
 // ── Budget constants ──────────────────────────────────────────────────────────

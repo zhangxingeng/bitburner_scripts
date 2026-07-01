@@ -1,5 +1,5 @@
 import type { NS, SourceFileLvl } from '@ns';
-import { findAllPaths } from './servers';
+import { findAllPaths } from './net_scan';
 
 /** Connect through a server path. Throws if any hop fails or SF4 is absent. */
 export function traverse(ns: NS, path: string[]): boolean {

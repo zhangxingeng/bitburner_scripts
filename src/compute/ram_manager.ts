@@ -1,5 +1,5 @@
 import { NS } from '@ns';
-import { findAllServers } from '../lib/servers';
+import { findAllServers } from '../lib/net_scan';
 import {
     HOME_RAM_RESERVE_MIN,
     HOME_RAM_USE,

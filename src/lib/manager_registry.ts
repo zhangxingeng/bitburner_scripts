@@ -13,10 +13,11 @@ import type { BooleanSettingKey } from './settings';
  * Adding a subsystem = a SCRIPT_PATHS entry + a row here + the manager script.
  * The sequencer never changes — that's what keeps the parallel build disjoint.
  *
- * NOTE: hacknet/stock engines are already launched by bootstrap's DAEMON_CATALOG;
- * their rows here point at lightweight STATUS-SHIM daemons that publish a
- * SubsystemStatus for the console (they report on the running engine, they don't
- * relaunch it).
+ * NOTE: hacknet/stock engines are already launched by lib/config.ts's
+ * DAEMON_CATALOG (walked each tick by lib/daemon_launcher.ts, called from
+ * brain.ts — bootstrap.ts, which used to own this, is gone); their rows here
+ * point at lightweight STATUS-SHIM daemons that publish a SubsystemStatus for
+ * the console (they report on the running engine, they don't relaunch it).
  */
 export interface ManagerSpec {
 	id:         string;             // SubsystemStatus id ('gang' | 'corp' | …)

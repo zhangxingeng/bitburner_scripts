@@ -1,6 +1,6 @@
 import type { NS } from '@ns';
 import { PORT_PHASE, PORT_HEARTBEAT, PORT_DECISION, PORT_AUGS, pushPort, clearPort, peekPort } from '../lib/ports';
-import { findAllServers, resetCaches } from '../lib/servers';
+import { findAllServers, resetCaches } from '../lib/net_scan';
 import {
     DesignPhase,
     PHASE_RAM_EARLY,

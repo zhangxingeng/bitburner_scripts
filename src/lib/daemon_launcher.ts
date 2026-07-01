@@ -127,6 +127,14 @@ export async function launchEligibleDaemons(
 /**
  * Inline BFS over the network; opens all owned port-opener tools and nukes each
  * host. Returns the full list of servers on which we have root access.
+ *
+ * Deliberately does NOT import lib/net_scan.ts's findAllServers: this file is
+ * transitively imported by brain.ts (BRAIN tier, never yields — the single
+ * most RAM-sensitive script in the system). net_scan.ts's shared bundle costs
+ * ~0.6 GB flat (scan+ps+hasRootAccess+getHostname+getServerMaxRam+
+ * getServerUsedRam) regardless of which one function you need — not worth it
+ * here for a ~15-line BFS that already costs only ns.scan (0.2 GB) alone. See
+ * docs/ram_evasion_rules.md §4.
  */
 export function nukeAndScan(ns: NS): string[] {
     const openers: Array<[string, (h: string) => void]> = [

@@ -1,6 +1,6 @@
 import type { NS } from '@ns';
 import { formatMoney, formatRam } from '../lib/format';
-import { getAvailableServers } from '../lib/servers';
+import { getAvailableServers } from '../lib/net_scan';
 import {
     DesignPhase,
     SCRIPT_PATHS,
