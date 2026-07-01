@@ -16,8 +16,9 @@ import {
     INTERVAL_NUKE_S,
     INTERVAL_PORT_OPENER_S,
     INTERVAL_SHARE_S,
+    Priority,
 } from '../lib/config';
-import { getReservedRam } from '../lib/machine_status';
+import { getReservedRam, getPressure } from '../lib/machine_status';
 import { PORT_PHASE, PORT_DECISION, peekPort, pushPort } from '../lib/ports';
 import { RamManager } from './ram_manager';
 import { TargetSelector, isServerPrepared, getTargetServers } from './target_selector';
@@ -34,6 +35,25 @@ import { execMulti } from './exec_multi';
 const FEATURES = {
     enableShare: true,
 } as const;
+
+/** Pressure signals older than this are treated as stale/resolved, not acted on
+ *  (mirrors hwgw_batcher.ts's own PRESSURE_STALE_MS — same concept, each reactor
+ *  reads the same file independently rather than sharing cross-file state). */
+const PRESSURE_STALE_MS = 10_000;
+
+/**
+ * Cooperative shrink hook (docs/design/14, dynamic brain layer): coordinator.ts is
+ * INCOME_ENGINE tier. If a fresher, higher-priority (BRAIN/ESSENTIAL) tier is
+ * blocked on home RAM, stop opening NEW targets this tick — proactively holding
+ * the line before a hard reservation violation forces hwgw_batcher's reactive
+ * kill-on-pressure path to terminate already-running batches instead.
+ */
+function effectiveMaxTargets(ns: NS): number {
+    const pressure = getPressure(ns, 'home');
+    if (!pressure) return MAX_TARGETS;
+    if (Date.now() - pressure.ts > PRESSURE_STALE_MS) return MAX_TARGETS;
+    return pressure.priority < Priority.INCOME_ENGINE ? 0 : MAX_TARGETS;
+}
 
 // ── Status panel helpers (dissolved from engine/batch_util.ts) ────────────────
 
@@ -285,11 +305,16 @@ export async function main(ns: NS): Promise<void> {
                 ramManager.updateRamInfo();
                 targetManager.refreshTargets();
 
+                const maxTargets = effectiveMaxTargets(ns);
+                if (maxTargets === 0 && tick % 10 === 0) {
+                    ns.print('Higher-priority RAM pressure signaled — holding at current targets, no new ones this cycle');
+                }
+
                 // Prepare any unprepared top targets before batching
                 const allTargets = getTargetServers(ns);
                 const unprepared = allTargets
                     .filter(t => !isServerPrepared(ns, t, TARGET_MONEY_THRESHOLD, TARGET_SECURITY_THRESHOLD))
-                    .slice(0, MAX_TARGETS);
+                    .slice(0, maxTargets);
 
                 if (unprepared.length > 0) {
                     await prepareServers(
@@ -298,7 +323,7 @@ export async function main(ns: NS): Promise<void> {
                     );
                 }
 
-                const launched = await batchManager.scheduleBatches(targetManager, ramManager, MAX_TARGETS);
+                const launched = await batchManager.scheduleBatches(targetManager, ramManager, maxTargets);
 
                 if (launched > 0 || tick % 5 === 0) {
                     batchManager.printStatus(ramManager, launched);
