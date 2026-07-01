@@ -2,6 +2,7 @@ import { NS } from '@ns';
 import { executeCommand } from '../lib/ns_dodge';
 import { formatMoney, shortNumber } from '../lib/format';
 import { PORT_AUGS, pushPort, clearPort } from '../lib/ports';
+import { SCRIPT_PATHS } from '../lib/config';
 
 // ── Cost model ────────────────────────────────────────────────────────────────
 // Each augmentation purchased this session multiplies the next aug's price by
@@ -41,18 +42,33 @@ interface PlanEntry {
  *
  * Flags:
  *   --purchase   Actually buy the affordable augmentations (Singularity via ns_dodge).
+ *   --install    After a fully-successful purchase, call ns.singularity.installAugmentations
+ *                (the actual soft-reset trigger) with brain.js as the post-reset callback
+ *                script, so the autonomous loop resumes on its own — no manual `run /brain.js`
+ *                needed after reset. Implies --purchase. Skipped if any purchase fails
+ *                partway (cascade prices may have drifted) — resetting on an incomplete,
+ *                unexpected buy is exactly the kind of avoidable risk to not take blind.
+ *                Irreversible for the current BitNode life — see settings.autoReset's own
+ *                "point of no return" doc comment (lib/settings.ts). Only ever invoked
+ *                automatically when settings.autoBuyAugs AND settings.autoReset are both on
+ *                (cross/player_sequencer.ts's RESET handling) — both default false.
  *
  * Usage:
  *   run /player/aug_planner.js             # plan only, publish count
  *   run /player/aug_planner.js --purchase  # plan + buy
+ *   run /player/aug_planner.js --install   # plan + buy + reset into a fresh life
  */
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
     ns.ui.openTail();
     ns.ui.setTailTitle('Aug Planner');
 
-    const flags   = ns.flags([['purchase', false]]) as unknown as { purchase: boolean };
-    const doPurchase = flags.purchase;
+    const flags = ns.flags([
+        ['purchase', false],
+        ['install',  false],
+    ]) as unknown as { purchase: boolean; install: boolean };
+    const doInstall  = flags.install;
+    const doPurchase = flags.purchase || doInstall;
 
     // Guard: Singularity required (SF4).
     const hasSF4 = await executeCommand<boolean>(
@@ -81,7 +97,18 @@ export async function main(ns: NS): Promise<void> {
             ns.tprint('No affordable augmentations to purchase right now.');
             return;
         }
-        await purchasePlan(ns, affordable);
+        const allBought = await purchasePlan(ns, affordable);
+
+        if (doInstall) {
+            if (!allBought) {
+                ns.tprint('SKIPPING install — not all planned augmentations were purchased '
+                    + '(see FAILED line above). Re-run --install once the plan is clean.');
+                return;
+            }
+            ns.tprint(`Installing ${affordable.length} augmentation(s) — resetting into a new life, `
+                + `resuming via ${SCRIPT_PATHS.brain}...`);
+            await executeCommand(ns, `ns.singularity.installAugmentations("${SCRIPT_PATHS.brain}")`);
+        }
     }
 }
 
@@ -336,9 +363,11 @@ function publishPendingAugs(ns: NS, count: number): void {
 /**
  * Purchase all affordable augmentations in plan order via Singularity + ns_dodge.
  * Must be called with the same ORDER as computePlan to keep cascade pricing correct.
+ * Returns true only if every planned entry was successfully purchased.
  */
-async function purchasePlan(ns: NS, affordable: PlanEntry[]): Promise<void> {
+async function purchasePlan(ns: NS, affordable: PlanEntry[]): Promise<boolean> {
     ns.print(`\nPurchasing ${affordable.length} augmentation(s)...`);
+    let allSucceeded = true;
 
     for (const entry of affordable) {
         ns.print(`  Buying ${entry.name} from ${entry.faction} (${formatMoney(entry.effectivePrice)})`);
@@ -353,6 +382,7 @@ async function purchasePlan(ns: NS, affordable: PlanEntry[]): Promise<void> {
         } else {
             ns.tprint(`FAILED: Could not purchase ${entry.name} from ${entry.faction}`);
             ns.tprint('Stopping purchase sequence — cascade prices may have shifted.');
+            allSucceeded = false;
             break;
         }
 
@@ -362,4 +392,5 @@ async function purchasePlan(ns: NS, affordable: PlanEntry[]): Promise<void> {
 
     ns.tprint('Purchase sequence complete. Run aug_planner again to verify.');
     ns.tprint('REMINDER: Restart faction_manager and re-earn rep before next install cycle.');
+    return allSucceeded;
 }

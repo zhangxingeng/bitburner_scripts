@@ -182,7 +182,16 @@ There is no longer a monolithic `strategy_agent`. The old strategy_agent's phase
 Phase transitions require 5 consecutive ticks of a new phase candidate before committing. This prevents oscillation between phases when conditions are borderline. Tunable in `lib/config.ts`.
 
 ### Purchase intent vs purchase
-The aug planner (`player/aug_planner.js`) publishes affordable aug counts to `PORT_AUGS`; `phase_detector` reads this and triggers the RESET phase recommendation. Scripts do NOT auto-buy programs or augmentations. The player must manually buy port openers from the darkweb (requires TOR router, $200k). Auto-buy via `ns.singularity.purchaseProgram()` costs 16× RAM under SF4 and is wrapped in the RAM-dodge (`lib/ns_dodge.ts`) for future use.
+The aug planner (`player/aug_planner.js`) publishes affordable aug counts to `PORT_AUGS`; `phase_detector` reads this and triggers the RESET phase recommendation. Scripts do NOT auto-buy port-opener programs — the player must manually buy those from the darkweb (requires TOR router, $200k); `ns.singularity.purchaseProgram()`'s 16× SF4-less RAM cost is wrapped in the RAM-dodge (`lib/ns_dodge.ts`) for future use.
+
+**Augmentations are different (2026-07-01):** `aug_planner.js --install` closes the full loop —
+buy every affordable aug, then call `ns.singularity.installAugmentations(brain.js)` so the
+soft-reset resumes the autonomous loop unattended (no manual `run /brain.js` after reset).
+Gated behind two settings that both default `false` (`autoBuyAugs` + `autoReset`,
+`lib/settings.ts` — each documents itself as "irreversible"/"point of no return"): with both
+off (the default), a pending aug/reset lands in the decisions queue for Approve/Deny/Defer
+instead. Install is skipped if any purchase in the batch fails partway (cascade prices may
+have drifted) — see `player/aug_planner.ts::purchasePlan`'s return value.
 
 ---
 

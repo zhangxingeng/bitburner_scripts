@@ -224,11 +224,13 @@ export async function main(ns: NS): Promise<void> {
 			if (reply.id !== AUG_DECISION_ID) continue;
 			removePending(ns, AUG_DECISION_ID);
 			if (reply.verdict === 'approve') {
+				// --install implies --purchase and installs (resets) on a fully-successful
+				// buy — matches what the decision prompt actually asked ("buy and reset?").
 				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
-					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--purchase');
+					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--install');
 					ns.print(pid > 0
-						? `DECISION approved — aug_planner --purchase launched (pid ${pid})`
-						: 'WARN: aug_planner --purchase failed to start on approval');
+						? `DECISION approved — aug_planner --install launched (pid ${pid})`
+						: 'WARN: aug_planner --install failed to start on approval');
 				}
 			} else if (reply.verdict === 'deny') {
 				augDeniedAtAugs = pendingAugs;
@@ -247,13 +249,17 @@ export async function main(ns: NS): Promise<void> {
 		if (phase === DesignPhase.RESET || pendingAugs >= PHASE_RESET_MIN_AUGS) {
 			if (settings.autoBuyAugs && settings.autoReset) {
 				// Full auto-reset — intentionally gated behind BOTH switches.
+				// --install implies --purchase and, on a fully-successful buy, calls
+				// ns.singularity.installAugmentations(brain.js) — the actual soft-reset
+				// trigger, with brain.js as the post-reset callback so the loop resumes
+				// unattended (aug_planner.ts's own doc comment has the full contract).
 				// Clear any decision surfaced before the switches were flipped to auto.
 				removePending(ns, AUG_DECISION_ID);
 				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
-					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--purchase');
+					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--install');
 					ns.print(pid > 0
-						? `AUTO: aug_planner --purchase launched (${pendingAugs} augs pending, pid ${pid})`
-						: 'WARN: aug_planner --purchase failed to start');
+						? `AUTO: aug_planner --install launched (${pendingAugs} augs pending, pid ${pid})`
+						: 'WARN: aug_planner --install failed to start');
 				}
 			} else {
 				// Surface as a pending decision (Approve/Deny/Defer). The control
@@ -266,7 +272,7 @@ export async function main(ns: NS): Promise<void> {
 						id: AUG_DECISION_ID,
 						kind: 'augReset',
 						prompt: `${pendingAugs} augmentations affordable — buy and reset?`,
-						command: 'run /player/aug_planner.js --purchase',
+						command: 'run /player/aug_planner.js --install',
 						context: { pendingAugs, money: player.money },
 						ts: Date.now(),
 					});
@@ -275,7 +281,7 @@ export async function main(ns: NS): Promise<void> {
 						notify(
 							ns,
 							`${pendingAugs} augmentations affordable — buy and reset?`,
-							'run /player/aug_planner.js --purchase',
+							'run /player/aug_planner.js --install',
 							{ pendingAugs, money: player.money },
 						);
 					}
