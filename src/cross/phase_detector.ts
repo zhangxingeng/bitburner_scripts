@@ -250,6 +250,8 @@ export async function main(ns: NS): Promise<void> {
             }
         } catch (err) {
             ns.print(`ERROR in phase detector: ${String(err)}`);
+            await ns.sleep(1000);  // back off after error, then continue loop
+            continue;
         }
 
         await ns.sleep(Math.max(50, LOOP_INTERVAL_MS - (Date.now() - loopStart)));

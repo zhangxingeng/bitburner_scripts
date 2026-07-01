@@ -82,6 +82,7 @@ export const SCRIPT_PATHS = {
     autoGrow:       '/workers/auto_grow.js',
     share:          '/workers/share.js',
     simpleHackLoop: '/workers/simple_hack_loop.js',
+    earlyPrepper:  '/workers/early_prepper.js',
     // root — lean BOOTSTRAP entry; fits fresh 8 GB home, hands off to coordinator
     bootstrap:      '/bootstrap.js',
     // compute/ — orchestrators and infrastructure daemons
@@ -102,6 +103,7 @@ export const SCRIPT_PATHS = {
     // player/ — Thread-P user-invoked modules (Phase 5); NOT auto-launched by coordinator
     factionManager:  '/player/faction_manager.js',
     programAcquirer: '/player/program_acquirer.js',
+    uiActions:       '/player/ui_actions.js',
     augPlanner:      '/player/aug_planner.js',
     crime:           '/player/crime.js',
     contractSolver:  '/player/contract_solver.js',
@@ -149,23 +151,26 @@ export function phaseRank(phase: DesignPhase): number {
  * Ordered list of infrastructure daemons owned by the orchestrator (`bootstrap.ts`).
  * `minPhase` is the earliest phase at which the daemon is eligible to launch.
  * `key` is a human-readable label (used in log output; not checked at runtime).
+ * `args` are optional command-line arguments passed to the daemon on launch.
  */
-export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase }[] = [
+export const DAEMON_CATALOG: { key: string; path: string; minPhase: DesignPhase; args?: string[] }[] = [
     // ── BOOTSTRAP — runs even at 8–16 GB home ────────────────────────────────
     // NOTE: spreader is a one-shot utility (exits after scan), NOT a persistent
     // daemon.  The orchestrator inlines BFS-nuke via its own nukeAndScan() each
     // tick; the spreader script is only needed as a periodic external call.
-    { key: 'hacknetManager', path: SCRIPT_PATHS.hacknetManager,  minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'phaseDetector',  path: SCRIPT_PATHS.phaseDetector,   minPhase: DesignPhase.BOOTSTRAP },
-    { key: 'bootAgent',      path: SCRIPT_PATHS.bootAgent,       minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'hacknetManager',  path: SCRIPT_PATHS.hacknetManager,  minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'phaseDetector',   path: SCRIPT_PATHS.phaseDetector,   minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'bootAgent',       path: SCRIPT_PATHS.bootAgent,       minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'earlyPrepper',    path: SCRIPT_PATHS.earlyPrepper,    minPhase: DesignPhase.BOOTSTRAP },
+    { key: 'uiActions',       path: SCRIPT_PATHS.uiActions,       minPhase: DesignPhase.BOOTSTRAP, args: ['--early-loop'] },
     // ── EARLY — available once home > PHASE_RAM_EARLY (16 GB) ────────────────
-    { key: 'pservManager',   path: SCRIPT_PATHS.pservManager,    minPhase: DesignPhase.EARLY     },
-    { key: 'gameAgent',      path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY     },
-    { key: 'stockEngine',     path: SCRIPT_PATHS.stockEngine,      minPhase: DesignPhase.EARLY },
-    { key: 'playerSequencer', path: SCRIPT_PATHS.playerSequencer, minPhase: DesignPhase.EARLY },
-    { key: 'controlConsole', path: SCRIPT_PATHS.controlConsole, minPhase: DesignPhase.EARLY },
+    { key: 'pservManager',    path: SCRIPT_PATHS.pservManager,    minPhase: DesignPhase.EARLY     },
+    { key: 'gameAgent',       path: SCRIPT_PATHS.gameAgent,       minPhase: DesignPhase.EARLY     },
+    { key: 'stockEngine',     path: SCRIPT_PATHS.stockEngine,     minPhase: DesignPhase.EARLY     },
+    { key: 'playerSequencer', path: SCRIPT_PATHS.playerSequencer, minPhase: DesignPhase.EARLY     },
+    { key: 'controlConsole',  path: SCRIPT_PATHS.controlConsole,  minPhase: DesignPhase.EARLY     },
     // ── MID — heavy batch engine (~15.85 GB import footprint); fits at ≥ 64 GB ─
-    { key: 'coordinator',    path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID       },
+    { key: 'coordinator',     path: SCRIPT_PATHS.coordinator,     minPhase: DesignPhase.MID       },
 ];
 
 // ── Batch operation constants ─────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import {
     PHASE_RAM_EARLY,
     PHASE_RAM_MID,
     PHASE_RAM_LATE,
+    PHASE_RAM_BOOTSTRAP,
 } from './lib/config';
 import { PORT_PHASE, peekPort } from './lib/ports';
 
@@ -56,6 +57,7 @@ export async function main(ns: NS): Promise<void> {
     const workerRam = ns.getScriptRam(worker);
 
     ns.tprint('BOOTSTRAP ORCHESTRATOR started — spawning daemons as home RAM allows.');
+    ns.tprint('BOOTSTRAP phase: early_prepper (smart target) + ui_actions (TOR/programs/RAM via UI) active.');
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -69,17 +71,25 @@ export async function main(ns: NS): Promise<void> {
         const rooted = nukeAndScan(ns);
         const target = pickTarget(ns, rooted);
 
-        // ── 4. Spray workers (only while coordinator is not yet running) ──────
-        // Once the coordinator is up it owns all free worker RAM; stop spraying.
+        // ── 4. Spray workers on remote servers (only while coordinator is absent) ──
+        // NOTE: early_prepper daemon handles the BEST target from home. This spray
+        // uses leftover RAM on remote servers for additional income — only on the
+        // current best target, and only when the HWGW batcher hasn't taken over yet.
         if (!running.has(SCRIPT_PATHS.coordinator)) {
-            const threads = deployWorkers(ns, rooted, worker, workerRam, target);
-            ns.print(`rooted=${rooted.length} target=${target} newThreads=${threads} phase=${phase}`);
+            const homeFree = freeHomeRam(ns);
+            // Only spray if home has enough headroom — prioritize daemon RAM
+            if (homeFree > DAEMON_LAUNCH_RESERVE + workerRam) {
+                const threads = deployWorkers(ns, rooted, worker, workerRam, target);
+                ns.print(`rooted=${rooted.length} target=${target} newThreads=${threads} phase=${phase} homeFree=${homeFree.toFixed(0)}GB`);
+            } else {
+                ns.print(`rooted=${rooted.length} target=${target} phase=${phase} homeFree=${homeFree.toFixed(0)}GB (skipped spray — low RAM)`);
+            }
         } else {
             ns.print(`rooted=${rooted.length} phase=${phase} coordinator=running`);
         }
 
-        // ── 5. Launch eligible daemons ────────────────────────────────────────
-        launchEligibleDaemons(ns, phase, running, freeHomeRam(ns));
+        // ── 5. Launch eligible daemons (takes its OWN fresh ns.ps snapshot) ──────
+        launchEligibleDaemons(ns, phase, freeHomeRam(ns));
 
         await ns.sleep(2000);
     }
@@ -119,13 +129,22 @@ function freeHomeRam(ns: NS): number {
 
 // ── Daemon lifecycle ──────────────────────────────────────────────────────────
 
+/** Per-daemon cooldown: prevent re-launching a daemon that died within this window. */
+const DAEMON_COOLDOWN_MS = 30000; // 30 seconds
+
+/** Track last successful launch time per daemon path to prevent death spirals. */
+const cooldowns = new Map<string, number>();
+
 /**
  * Walk `DAEMON_CATALOG` in declaration order; call `ns.exec` for any daemon whose
  * `minPhase` rank is ≤ the current phase rank, that is not already running, and
  * that fits in free home RAM with `DAEMON_LAUNCH_RESERVE` GB to spare.
  *
- * A running `available` tally is decremented on each successful exec so multiple
- * daemons in the same tick cannot over-commit the same RAM.
+ * A fresh `ns.ps` snapshot is taken INSIDE this function to avoid stale-process
+ * races (the caller's snapshot may be seconds old after BFS + worker spray).
+ *
+ * A per-daemon cooldown prevents the death spiral: if a daemon dies within
+ * DAEMON_COOLDOWN_MS of launch, bootstrap won't immediately relaunch it.
  *
  * Spawn mechanism: `ns.exec` (API Mechanism #1) — synchronous PID means the
  * `ns.ps`-based running set on the *next* tick reflects the new process instantly;
@@ -134,21 +153,30 @@ function freeHomeRam(ns: NS): number {
 function launchEligibleDaemons(
     ns:       NS,
     phase:    DesignPhase,
-    running:  Set<string>,
     freeHome: number,
 ): void {
-    const rank = phaseRank(phase);
+    // FRESH snapshot — the caller's snapshot is stale after BFS + worker spray.
+    const running = new Set(ns.ps('home').map(p => p.filename));
+    const now     = Date.now();
+    const rank    = phaseRank(phase);
     let available = freeHome; // running tally — prevent same-tick RAM over-commit
 
     for (const daemon of DAEMON_CATALOG) {
         if (phaseRank(daemon.minPhase) > rank) continue; // phase gate not yet reached
         if (running.has(daemon.path))          continue; // already alive
+
+        // Cooldown guard: don't re-launch a daemon that died too fast.
+        const lastLaunch = cooldowns.get(daemon.path) ?? 0;
+        if (now - lastLaunch < DAEMON_COOLDOWN_MS) continue;
+
         const scriptRam = ns.getScriptRam(daemon.path);
         if (available < scriptRam + DAEMON_LAUNCH_RESERVE) continue; // insufficient headroom
-        const pid = ns.exec(daemon.path, 'home', 1);
+        const pid = ns.exec(daemon.path, 'home', 1, ...(daemon.args ?? []));
         if (pid !== 0) {
             available -= scriptRam;
-            ns.tprint(`ORCHESTRATOR: launched ${daemon.path} (${scriptRam.toFixed(2)} GB)`);
+            cooldowns.set(daemon.path, now);
+            const argsStr = daemon.args ? ' ' + daemon.args.join(' ') : '';
+            ns.tprint(`ORCHESTRATOR: launched ${daemon.path}${argsStr} (${scriptRam.toFixed(2)} GB)`);
         }
     }
 }

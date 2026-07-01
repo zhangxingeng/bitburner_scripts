@@ -50,7 +50,7 @@ export async function main(ns: NS): Promise<void> {
         haveHacknetServers = false;
     }
 
-    // Main loop
+    // Main loop — stays resident, re-evaluates on backoff when nothing to buy.
     let remainingBudget = MAX_SPEND;
     do {
         try {
@@ -58,13 +58,19 @@ export async function main(ns: NS): Promise<void> {
 
             // Track spending
             if (moneySpent === false) {
-                setStatus(ns, 'Spending limit reached or no worthwhile upgrades available. Breaking...');
-                break;
+                // Nothing worthwhile right now — back off, then re-evaluate.
+                // Staying resident prevents the bootstrap re-launch thrash.
+                setStatus(ns, 'No worthwhile upgrades available. Sleeping...');
+                remainingBudget = MAX_SPEND; // reset budget for next cycle
+                await ns.sleep(10000); // 10-second backoff
+                continue;
             } else if (moneySpent > 0) {
                 remainingBudget -= moneySpent;
                 if (remainingBudget <= 0) {
-                    setStatus(ns, 'Budget depleted. Breaking...');
-                    break;
+                    setStatus(ns, 'Budget depleted. Sleeping...');
+                    remainingBudget = MAX_SPEND; // reset budget for next cycle
+                    await ns.sleep(10000);
+                    continue;
                 }
             }
 
@@ -181,8 +187,10 @@ function upgradeHacknet(ns: NS): number | false {
     for (let i = 0; i < numNodes; i++) {
         const nodeStats = getNodeStats(ns, i);
 
-        // Try to calculate production using formulas if available
-        if (haveHacknetServers) {
+        // Try to calculate production using formulas if available.
+        // Guard with optional chaining: when SF4 is absent ns.formulas is undefined;
+        // when SF4 is present the call costs dynamic RAM and could OOM-kill the process.
+        if (haveHacknetServers && ns.formulas?.hacknetServers?.hashGainRate) {
             try {
                 const formulaProduction = ns.formulas.hacknetServers.hashGainRate(
                     nodeStats.level,

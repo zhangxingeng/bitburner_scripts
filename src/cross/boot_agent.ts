@@ -114,37 +114,43 @@ export async function main(ns: NS): Promise<void> {
     while (true) {
         tick++;
 
-        // 1. Read command from PORT_CMD (non-blocking)
-        const cmdStr = popPort(ns, PORT_CMD);
-        if (cmdStr !== null && cmdStr !== '') {
-            try {
-                const cmd = JSON.parse(cmdStr) as BootCommand;
-                ns.print(`Processing command: ${cmd.method} [${cmd.id}]`);
-                const result = executeCommand(ns, cmd);
-                pushPort(ns, PORT_RESULT, JSON.stringify(result));
-            } catch (e) {
-                pushPort(ns, PORT_RESULT, JSON.stringify({
-                    id: 'error', success: false, error: String(e),
-                }));
+        try {
+            // 1. Read command from PORT_CMD (non-blocking)
+            const cmdStr = popPort(ns, PORT_CMD);
+            if (cmdStr !== null && cmdStr !== '') {
+                try {
+                    const cmd = JSON.parse(cmdStr) as BootCommand;
+                    ns.print(`Processing command: ${cmd.method} [${cmd.id}]`);
+                    const result = executeCommand(ns, cmd);
+                    pushPort(ns, PORT_RESULT, JSON.stringify(result));
+                } catch (e) {
+                    pushPort(ns, PORT_RESULT, JSON.stringify({
+                        id: 'error', success: false, error: String(e),
+                    }));
+                }
             }
-        }
 
-        // 2. Check heartbeat from PORT_HEARTBEAT (peek — doesn't consume)
-        const heartbeat = ns.peek(PORT_HEARTBEAT);
-        if (heartbeat !== 'NULL PORT DATA' && heartbeat !== null) {
-            lastHeartbeat = Date.now();
-        }
+            // 2. Check heartbeat from PORT_HEARTBEAT (peek — doesn't consume)
+            const heartbeat = ns.peek(PORT_HEARTBEAT);
+            if (heartbeat !== 'NULL PORT DATA' && heartbeat !== null) {
+                lastHeartbeat = Date.now();
+            }
 
-        // 3. Periodic clear of PORT_HEARTBEAT to prevent overflow
-        //    Port holds 50 entries; heartbeat every 5s from phase_detector would fill
-        //    in ~250s without consumption. Clear periodically to stay safe.
-        if (tick % PORT_CLEAR_INTERVAL === 0) {
-            clearPort(ns, PORT_HEARTBEAT);
-        }
+            // 3. Periodic clear of PORT_HEARTBEAT to prevent overflow
+            //    Port holds 50 entries; heartbeat every 5s from phase_detector would fill
+            //    in ~250s without consumption. Clear periodically to stay safe.
+            if (tick % PORT_CLEAR_INTERVAL === 0) {
+                clearPort(ns, PORT_HEARTBEAT);
+            }
 
-        // 4. Alert if heartbeat stale (phase_detector may be dead)
-        if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
-            ns.print('WARNING: No phase_detector heartbeat for 30s — /cross/phase_detector.js may be down');
+            // 4. Alert if heartbeat stale (phase_detector may be dead)
+            if (Date.now() - lastHeartbeat > HEARTBEAT_TIMEOUT_MS) {
+                ns.print('WARNING: No phase_detector heartbeat for 30s — /cross/phase_detector.js may be down');
+            }
+        } catch (err) {
+            ns.print(`ERROR in boot agent: ${String(err)}`);
+            await ns.sleep(1000);  // back off after error, then continue loop
+            continue;
         }
 
         await ns.sleep(LOOP_INTERVAL_MS);

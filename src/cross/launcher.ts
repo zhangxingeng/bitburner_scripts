@@ -33,19 +33,25 @@ import { ensureTerminal } from '../lib/navigator';
 /**
  * Inject `command` into the Bitburner terminal as if a human typed and pressed Enter.
  *
- * Uses the React event-handler pattern proven in:
- *   - inigo  `src/augment/completeBitnode.ts:44`
- *   - alainbryden `scan.js:36`
+ * Dispatches REAL DOM events — native value-setter, then an `input` event, then
+ * an Enter `keydown` — instead of calling the React handlers directly. This is
+ * the path a physical keystroke takes: the `input` event makes React re-render
+ * with the new value, so the Enter handler reads the FRESH state. Calling the
+ * captured handlers directly submitted the PRE-change value and nothing ran
+ * (the game's onKeyDown reads `command` from React state, not the event) — see
+ * docs/design/13 §8.3.
  *
  * Returns `true` on success, `false` if the terminal element is absent (game
- * version drift, terminal not focused/visible) or if the handler invocation
- * throws.  Callers must fall back to `ns.exec` on `false`.
+ * version drift, terminal not on screen) or if the dispatch throws.  Callers
+ * must fall back to `ns.exec` on `false`.
  */
 export function runTerminalCommand(command: string): boolean {
-    // Stealth DOM access — eval hides the literal token from the static analyzer.
+    // Stealth DOM access — eval hides the literal tokens from the static analyzer.
     // ONLY for UI interfacing; must never read/mutate internal game state.
     // eslint-disable-next-line no-eval
     const doc = eval('document') as Document;
+    // eslint-disable-next-line no-eval
+    const win = eval('window') as Window & typeof globalThis;
 
     const input = doc.getElementById('terminal-input') as HTMLInputElement | null;
 
@@ -62,15 +68,27 @@ export function runTerminalCommand(command: string): boolean {
     }
 
     try {
-        // React stows synthetic-event props on the DOM element.
-        // Object.keys(el)[1] is the handler-bearing key (index 0 is the React
-        // internal fibre key; index 1 carries the props including onChange /
-        // onKeyDown).  Cast through unknown to satisfy strict tsc.
-        const handlerKey = Object.keys(input)[1];
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const handlers = (input as unknown as Record<string, any>)[handlerKey];
-        handlers.onChange({ target: { value: command } });
-        handlers.onKeyDown({ key: 'Enter', preventDefault: () => null });
+        // 1. Set the value through the prototype's native setter. React's
+        //    controlled <input> tracks the last value it wrote; assigning via the
+        //    native setter (not `input.value =`) leaves that tracker stale, so
+        //    React's onChange actually fires on the next input event — the
+        //    standard controlled-input drive idiom.
+        const setNativeValue = Object.getOwnPropertyDescriptor(
+            win.HTMLInputElement.prototype, 'value',
+        )?.set;
+        if (!setNativeValue) return false;
+        setNativeValue.call(input, command);
+
+        // 2. Real `input` event → React runs onChange → setValue(command) →
+        //    synchronous re-render (React 17 flushes before dispatch returns), so
+        //    the element's onKeyDown now closes over the fresh `value` state.
+        input.dispatchEvent(new win.Event('input', { bubbles: true }));
+
+        // 3. Real Enter keydown → React invokes the FRESH onKeyDown, which echoes
+        //    the line and runs Terminal.executeCommands(value) (TerminalInput.tsx).
+        input.dispatchEvent(new win.KeyboardEvent('keydown', {
+            key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+        }));
     } catch {
         return false;
     }
