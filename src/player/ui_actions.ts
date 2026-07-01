@@ -12,7 +12,7 @@ import {
  * UI Actions — SF4-free early game automation via DOM clicks + terminal injection.
  *
  * ⚠️  Function names here (buyHomeRam, buyHomeCores, makeProgram, ...) deliberately
- * avoid colliding with ns.* API names — see docs/design/15-ram-evasion-rules.md.
+ * avoid colliding with ns.* API names — see docs/ram_evasion_rules.md.
  *
  * NOTE: brain.ts (docs/design/14) calls buyTOR/buyAllPortOpeners/buyHomeRam/
  * takeCourse directly, inline, pre-SF4 — it is NOT launched as a separate

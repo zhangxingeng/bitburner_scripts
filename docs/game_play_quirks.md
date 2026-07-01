@@ -119,6 +119,52 @@ so a queue doesn't silently evict data nobody read.
 ### Bridge auto-syncs on connect + file watcher
 The bridge watches `dist/` directory and auto-pushes changed files. It also does a comparison sync on initial connect. No manual sync needed.
 
+### `build/watch.js`: syncStatic() must never own `.js` orphan cleanup (2026-07-01)
+`syncStatic()` mirrors `src/` → `dist/` via the `sync-directory` npm package with
+`deleteOrphaned: true`. That package's own internal orphan check is a **naive same-relative-path,
+same-extension match** between `srcDir` and `targetDir` — it has no concept of TypeScript
+compilation. Since every real source file is `.ts`/`.tsx` and every compiled file is `.js`
+(different extension, never a literal filename match), `sync-directory` sees **every** compiled
+`.js` file in `dist/` as orphaned and deletes it on every watcher startup — only sheer timing
+luck (whichever files `tsc` hadn't re-emitted yet at that exact moment) ever spared any of them.
+This is what silently wiped `dist/cross/game_agent.js` to an empty file while `brain.ts` was live
+in-game, surfacing as a `"Script content is an empty string"` runtime crash with no code change
+behind it. Fix: `syncStatic()`'s `exclude` callback must unconditionally exclude `.js` regardless
+of `allowedFiletypes` — `.js` orphan cleanup is owned entirely by `initTypeScript()`/
+`watchTypeScript()` in `build/watch.js`, which correctly check for a same-named `.ts`/`.tsx`
+sibling before deleting. If you ever touch `build/watch.js`'s `exclude` logic, keep `.js` in
+`syncStatic()`'s blind spot.
+
+---
+
+## DOM/UI Automation Quirks (`player/ui_actions.ts`, `lib/dom.ts`)
+
+### Tech vendors and universities are city-locked
+Each TechVendor/University location belongs to exactly one city (Alpha Enterprises/Rothman
+University = Sector-12, ECorp/NetLink Technologies/Summit University = Aevum, Omega Software =
+Ishima, CompuTek/OmniTek/ZB Institute = Volhaven). The player starts in Sector-12 and there is no
+travel automation yet, so only Sector-12 locations are ever reachable. Iterating a flat candidate
+list without filtering by `ns.getPlayer().city` first produces endless "location not found" spam
+for the unreachable-city entries — filter by city before attempting to click.
+
+### Studying is not idempotent — re-invoking always restarts the class
+Clicking "Study Computer Science" (or any class) always starts a brand-new `ClassWork`, which
+calls `.finish(true)` on whatever class is already running (`Player.startWork()` in the game's
+`PlayerObjectWorkMethods.ts`). Non-Singularity (DOM-clicked) class work always has
+`singularity: false`, so `ClassWork.finish()` always pops a summary dialog. A polling loop that
+unconditionally re-clicks "take course" every tick will restart-and-dialog on every tick, wiping
+progress each time. Track "already started studying" with a process-local flag instead of a
+DOM-presence re-check — see the next entry for why the DOM check alone isn't reliable here.
+
+### Any navigation away from the Work page drops focus (but not the work itself)
+`GameRoot.tsx` auto-calls `Player.stopFocusing()` whenever the active page changes away from
+`Page.Work` — this loses the focus XP/speed bonus but does **not** cancel `currentWork`. Since
+`lib/dom.ts::visitLoc()` always navigates to the City page first (for any tech-vendor/university
+action), any purchase-check loop that runs before/alongside a study loop will silently unfocus the
+class every cycle. Fix: after any away-navigation, click the game's own always-present "Focus"
+button (rendered by `CharacterOverview.tsx`'s `WorkInProgressOverview` on any page while unfocused
+work is active — safe to click repeatedly, never touches `currentWork`) to reclaim it.
+
 ---
 
 ## Phase Detection & Coordinator

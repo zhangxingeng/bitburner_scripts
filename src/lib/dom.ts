@@ -2,7 +2,7 @@
  * DOM UTILITIES — zero-RAM-cost browser interaction helpers.
  *
  * ⚠️ This file relies on the keyword-split and ns.*-name-collision RAM-evasion
- * rules — see docs/design/15-ram-evasion-rules.md for the full explanation and
+ * rules — see docs/ram_evasion_rules.md for the full explanation and
  * the current rename table. Short version: never un-split `docu'+'ment`/
  * `win'+'dow` below, and never name a function after an `ns.*` API.
  *
