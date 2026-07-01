@@ -1,6 +1,7 @@
 import { NS, FactionWorkType } from '@ns';
 import { formatTime, shortNumber } from '../lib/format';
 import { executeCommand } from '../lib/ns_dodge';
+import { hasSF4 } from '../lib/sf_check';
 
 // ── Faction priority list ─────────────────────────────────────────────────────
 // Mirrors alainbryden's preferredEarlyFactionOrder with full-game coverage.
@@ -102,10 +103,7 @@ export async function main(ns: NS): Promise<void> {
     ns.ui.setTailTitle('Faction Manager');
 
     // Guard: Singularity API required (SF4).
-    const hasSF4 = await executeCommand<boolean>(
-        ns, 'ns.singularity.getOwnedSourceFiles().some(sf => sf.n === 4)',
-    );
-    if (!hasSF4) {
+    if (!hasSF4(ns)) {
         ns.tprint('ERROR: faction_manager requires SF4 (Singularity). Exiting.');
         return;
     }

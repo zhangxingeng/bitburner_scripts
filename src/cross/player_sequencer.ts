@@ -4,6 +4,7 @@ import { DesignPhase, PHASE_RESET_MIN_AUGS, SCRIPT_PATHS } from '../lib/config';
 import { loadSettings } from '../lib/settings';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
+import { hasSF4 } from '../lib/sf_check';
 import { savePlayerState } from '../lib/player_state';
 import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 import { PLAYER_MANAGERS } from '../lib/manager_registry';
@@ -53,19 +54,6 @@ const AUG_DECISION_ID = 'augReset';
 const managerState = new Map<string, { knownAlive: boolean; failCount: number }>();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Check whether the player owns Source-File 4 (Singularity).
- * Runs the check inside a temp dodger script so the 16 GB Singularity cost
- * is paid by the dodger, not by this daemon.
- */
-async function checkSf4(ns: NS): Promise<boolean> {
-	const result = await executeCommand<boolean>(
-		ns,
-		'ns.singularity.getOwnedSourceFiles().some(sf => sf.n === 4)',
-	);
-	return result === true;
-}
 
 /** Count how many port-opener .exe files currently exist on home. */
 function countOpeners(ns: NS): number {
@@ -174,7 +162,7 @@ export async function main(ns: NS): Promise<void> {
 	ns.print('Player sequencer started');
 
 	// ── One-time startup: cache SF4 (stable within a node) ───────────────────
-	let sf4 = await checkSf4(ns);
+	let sf4 = hasSF4(ns);
 	ns.print(sf4
 		? 'SF4 detected — trusted actions enabled'
 		: 'SF4 not found — idling until available');
@@ -208,7 +196,7 @@ export async function main(ns: NS): Promise<void> {
 
 		// Re-check SF4 periodically — only when still absent (it never reverts)
 		if (!sf4 && tick % SF4_RECHECK_INTERVAL === 0) {
-			sf4 = await checkSf4(ns);
+			sf4 = hasSF4(ns);
 			if (sf4) ns.print('SF4 now detected — trusted actions enabled');
 		}
 

@@ -1,5 +1,6 @@
 import { NS } from '@ns';
 import { executeCommand } from '../lib/ns_dodge';
+import { hasSF4 } from '../lib/sf_check';
 import { formatMoney, shortNumber } from '../lib/format';
 import { PORT_AUGS, pushPort, clearPort } from '../lib/ports';
 import { SCRIPT_PATHS } from '../lib/config';
@@ -71,10 +72,7 @@ export async function main(ns: NS): Promise<void> {
     const doPurchase = flags.purchase || doInstall;
 
     // Guard: Singularity required (SF4).
-    const hasSF4 = await executeCommand<boolean>(
-        ns, 'ns.singularity.getOwnedSourceFiles().some(sf => sf.n === 4)',
-    );
-    if (!hasSF4) {
+    if (!hasSF4(ns)) {
         ns.tprint('ERROR: aug_planner requires SF4 (Singularity). Exiting.');
         return;
     }

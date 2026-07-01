@@ -1,5 +1,5 @@
 import type { NS } from '@ns';
-import { executeCommand } from './lib/ns_dodge';
+import { hasSF4 } from './lib/sf_check';
 import { buyTOR, buyAllPortOpeners, buyHomeRam, takeCourse, resumeFocus } from './player/ui_actions';
 import {
     currentPhase,
@@ -58,21 +58,6 @@ const ACQUIRE_TICKS = 25;
 /** Status print cadence (~50s). */
 const STATUS_TICKS = 250;
 
-// ── Helpers ─────────────────────────────────────────────────────────────────────
-
-/**
- * Check whether the player owns Source-File 4 (Singularity).
- * Runs the check inside a temp dodger script so the 16 GB Singularity cost
- * (getOwnedSourceFiles is SF4Cost-gated — see lib/dom.ts's header) is paid by
- * the dodger, not by this script. Same pattern as cross/player_sequencer.ts.
- */
-async function checkSf4(ns: NS): Promise<boolean> {
-    const result = await executeCommand<boolean>(
-        ns, 'ns.singularity.getOwnedSourceFiles().some(sf => sf.n === 4)',
-    );
-    return result === true;
-}
-
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export async function main(ns: NS): Promise<void> {
@@ -82,7 +67,7 @@ export async function main(ns: NS): Promise<void> {
 
     ensureDefaultBudget(ns, 'home');
 
-    let sf4 = await checkSf4(ns);
+    let sf4 = hasSF4(ns);
     ns.print(sf4
         ? 'SF4 detected — purchases deferred to cross/player_sequencer.js'
         : 'No SF4 yet — driving early-game purchases directly via DOM/terminal');
@@ -126,7 +111,7 @@ export async function main(ns: NS): Promise<void> {
 
             // ── SF4 re-check (rare) ───────────────────────────────────────────
             if (!sf4 && tick % SF4_RECHECK_TICKS === 0) {
-                sf4 = await checkSf4(ns);
+                sf4 = hasSF4(ns);
                 if (sf4) ns.print('SF4 now detected — handing purchases to player_sequencer.js');
             }
 

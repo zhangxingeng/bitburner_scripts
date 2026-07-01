@@ -157,3 +157,41 @@ inline scan only ever cost `ns.scan` (0.2 GB) alone. Same logic protects
 `brain.ts` (BRAIN tier, never yields — the single most RAM-sensitive script in
 the system) and deliberately keeps its own inline BFS rather than importing
 either module.
+
+---
+
+## 6. `ns.getResetInfo()` for owned-source-file checks — not the dodge pattern (2026-07-01)
+
+Discovered live: `brain.ts`'s SF4 bootstrap check (`ns.singularity.getOwnedSourceFiles()`
+run through the `ns_dodge.ts::executeCommand` temp-script dodge — the same pattern
+duplicated in `player_sequencer.ts`, `aug_planner.ts`, `faction_manager.ts`, and
+`lib/connect.ts::checkOwnSF`) had been silently failing every ~5 minutes for hours:
+the temp script itself pays `getOwnedSourceFiles`'s cost
+(`SF4Cost(SingularityFn3)` = 5 GB base, **80 GB without SF4**), so on any home
+under ~80 GB — i.e. exactly the early/mid-game state this check exists to detect
+— `ns.run(scriptFile)` returns pid 0 every single time. `executeCommand` has no
+telemetry for this failure mode (`ns.print`, not `ns.tprint` — invisible on the
+terminal) and never reaches its own cleanup step on early-return, so `tmp/*.js`
+temp scripts piled up forever (one every ~5 min, no matching `.txt` result ever
+appears — that mismatch is the tell if you see it again).
+
+The dodge script never actually validated anything here — a false "no SF4"
+result from ram-exhaustion happened to be indistinguishable from a genuine one,
+purely by accident.
+
+**Fix: use `ns.getResetInfo().ownedSF` instead.** It's a flat, non-Singularity
+1 GB (`RamCostGenerator.ts` — no `SF4Cost` wrapper, no 16x multiplier) and
+returns `Map<sfNumber, activeLevel>` (missing key = level 0) — the exact same
+data, gated by nothing. No dodge script needed at all; call it directly from
+any script, before or after SF4 exists. See `lib/sf_check.ts::checkOwnSF`/`hasSF4`,
+now the single canonical implementation — every prior call site above was
+migrated to it.
+
+`lib/connect.ts::traverse`/`autoConnect` still directly reference
+`ns.singularity.connect` (`SF4Cost(SingularityFn1)` = 2 GB base, 32 GB without
+SF4) — that's a genuine, deserved cost for a file whose whole purpose is
+Singularity connect, unavoidable by the per-imported-file rule (§4). The point
+of moving `checkOwnSF` out to its own module was so a consumer that only wants
+*the check* (e.g. `stock/config.ts`) doesn't pay for `connect.ts`'s unrelated
+32 GB tax just by importing the same file — **import `checkOwnSF`/`hasSF4`
+from `lib/sf_check.ts` directly**, never through `lib/connect.ts`.

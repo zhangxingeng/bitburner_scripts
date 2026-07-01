@@ -1,5 +1,6 @@
-import type { NS, SourceFileLvl } from '@ns';
+import type { NS } from '@ns';
 import { findAllPaths } from './net_scan';
+import { checkOwnSF } from './sf_check';
 
 /** Connect through a server path. Throws if any hop fails or SF4 is absent. */
 export function traverse(ns: NS, path: string[]): boolean {
@@ -21,11 +22,4 @@ export function autoConnect(ns: NS, target: string): void {
     for (const server of path.slice(1)) {
         ns.singularity.connect(server);
     }
-}
-
-/** Check whether the player owns a source file at the given level. */
-export function checkOwnSF(ns: NS, number: number, lvl = 0): boolean {
-    return ns.singularity.getOwnedSourceFiles().some(
-        (sf: SourceFileLvl) => sf.n === number && sf.lvl >= lvl,
-    );
 }
