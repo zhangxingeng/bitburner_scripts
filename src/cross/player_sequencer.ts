@@ -51,6 +51,36 @@ const DECISION_DEFER_TICKS = 12;
 /** Stable id for the (single) aug-purchase/reset judgment call. */
 const AUG_DECISION_ID = 'augReset';
 
+/** Prefix for aug_planner.ts's per-(faction,aug) donation decisions. */
+const AUG_DONATE_PREFIX = 'augDonate:';
+
+/**
+ * Same file aug_planner.ts reads before surfacing a donation candidate again
+ * (Record<id, untilTs epoch-ms>). aug_planner.ts is one-shot and never drains
+ * replies itself, so this sequencer is the only writer — deny/defer verdicts
+ * on `augDonate:*` ids are applied here, not in aug_planner.ts.
+ */
+const DONATE_COOLDOWN_FILE = 'status/aug_donate_cooldown.json';
+const DONATE_DENY_COOLDOWN_MS = 6 * 60 * 60 * 1000;  // 6h — considered veto
+const DONATE_DEFER_COOLDOWN_MS = 30 * 60 * 1000;      // 30m — ask again soon
+
+function loadDonateCooldowns(ns: NS): Record<string, number> {
+	try {
+		const raw = ns.read(DONATE_COOLDOWN_FILE);
+		if (!raw || raw.trim() === '') return {};
+		const parsed = JSON.parse(raw) as unknown;
+		return (parsed && typeof parsed === 'object') ? parsed as Record<string, number> : {};
+	} catch {
+		return {};
+	}
+}
+
+function setDonateCooldown(ns: NS, id: string, untilTs: number): void {
+	const cooldowns = loadDonateCooldowns(ns);
+	cooldowns[id] = untilTs;
+	ns.write(DONATE_COOLDOWN_FILE, JSON.stringify(cooldowns, null, 2), 'w');
+}
+
 /** Per-manager crash-guard state for the generalized registry walk (design/11). */
 const managerState = new Map<string, { knownAlive: boolean; failCount: number }>();
 
@@ -228,6 +258,32 @@ export async function main(ns: NS): Promise<void> {
 			} else if (reply.verdict === 'defer') {
 				augDeferUntilTick = tick + DECISION_DEFER_TICKS;
 				ns.print(`DECISION deferred — re-surfacing in ${DECISION_DEFER_TICKS} ticks`);
+			}
+		}
+
+		// ── Apply human/MCP verdicts on faction-donation decisions ────────────
+		// aug_planner.ts surfaces these (kind 'spend', id `augDonate:<faction>:<augName>`)
+		// but is one-shot and never drains replies itself — this sequencer both
+		// launches the follow-up --donate run on approve AND writes the cooldown
+		// file on deny/defer (aug_planner.ts only ever reads that file).
+		for (const reply of drainReplies(ns, id => id.startsWith(AUG_DONATE_PREFIX))) {
+			removePending(ns, reply.id);
+			const [, faction, augName] = reply.id.split(':');
+			if (reply.verdict === 'approve') {
+				const result = await requestRun(ns, {
+					script: SCRIPT_PATHS.augPlanner, threads: 1, priority: Priority.ESSENTIAL,
+					args: ['--donate', '--faction', faction, '--augName', augName],
+				});
+				const pid = result.ok ? result.pid : 0;
+				ns.print(pid > 0
+					? `DECISION approved — aug_planner --donate ${faction}/${augName} launched (pid ${pid})`
+					: `WARN: aug_planner --donate ${faction}/${augName} failed to start on approval`);
+			} else if (reply.verdict === 'deny') {
+				setDonateCooldown(ns, reply.id, Date.now() + DONATE_DENY_COOLDOWN_MS);
+				ns.print(`DECISION denied — donation ${faction}/${augName} suppressed for ${DONATE_DENY_COOLDOWN_MS / 3_600_000}h`);
+			} else if (reply.verdict === 'defer') {
+				setDonateCooldown(ns, reply.id, Date.now() + DONATE_DEFER_COOLDOWN_MS);
+				ns.print(`DECISION deferred — donation ${faction}/${augName} re-surfacing in ${DONATE_DEFER_COOLDOWN_MS / 60_000}m`);
 			}
 		}
 

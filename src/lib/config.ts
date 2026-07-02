@@ -137,6 +137,7 @@ export const SCRIPT_PATHS = {
     graftingManager:    '/player/grafting_manager.js',
     hacknetStatus:      '/player/hacknet_status.js',
     stockStatus:        '/player/stock_status.js',
+    bitnodeSelector:    '/player/bitnode_selector.js',
 } as const;
 
 /** Base RAM cost per worker script thread (GB). */

@@ -36,6 +36,8 @@ export const PLAYER_MANAGERS: ManagerSpec[] = [
 	{ id: 'grafting',    path: SCRIPT_PATHS.graftingManager,    settingKey: 'autoGrafting',       label: 'Grafting'    },
 	{ id: 'hacknet',     path: SCRIPT_PATHS.hacknetStatus,      settingKey: 'autoHacknet',        label: 'Hacknet'     },
 	{ id: 'stock',       path: SCRIPT_PATHS.stockStatus,        settingKey: 'autoStock',          label: 'Stock'       },
+	{ id: 'crime',       path: SCRIPT_PATHS.crime,              settingKey: 'autoCrime',          label: 'Crime'       },
+	{ id: 'bitnode',     path: SCRIPT_PATHS.bitnodeSelector,    settingKey: 'autoBitNode',        label: 'BitNode'     },
 ];
 
 /** Subsystem ids in registry order (the console loads statuses for these). */

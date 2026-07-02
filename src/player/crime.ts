@@ -5,7 +5,6 @@ import { executeCommand } from '../lib/ns_dodge';
 import { saveSubsystem } from '../lib/subsystem_state';
 import type { SubsystemStatus } from '../lib/subsystem_state';
 import { loadSettings } from '../lib/settings';
-import type { BrainSettings } from '../lib/settings';
 import { hasSF4 } from '../lib/sf_check';
 
 /**
@@ -23,9 +22,6 @@ import { hasSF4 } from '../lib/sf_check';
  * NetscriptDefinitions.d.ts LocationName enum) — trainStat() travels there
  * first if needed, otherwise training silently no-ops from any other city.
  */
-
-/** Local extension until settings.ts grows a real `autoCrime` field (tracked separately). */
-type CrimeSettings = BrainSettings & { autoCrime?: boolean };
 
 /** Minimum stats to aim for during baseline training, one stat-step per tick. */
 const MIN_STAT_THRESHOLD = 100;
@@ -64,8 +60,8 @@ export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
 
     while (true) {
-        const settings = loadSettings(ns) as CrimeSettings;
-        const enabled = settings.autoCrime ?? false;
+        const settings = loadSettings(ns);
+        const enabled = settings.autoCrime;
         const available = hasSF4(ns);
 
         // ── Availability/enabled guard — mirrors grafting_manager.ts exactly ──

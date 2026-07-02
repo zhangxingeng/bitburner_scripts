@@ -130,6 +130,26 @@ async function gatherSnapshot(ns: NS): Promise<BitNodeSnapshot | null> {
             for (const [k, v] of resetInfo.ownedSF) ownedSF[k] = v;
             const player = ns.getPlayer();
             const wd = ns.getServer('${WORLD_DAEMON_HOST}');
+            // '${WORLD_DAEMON_HOST}' has no network-topology entry (verified against
+            // bitburner-src: it's never linked via ns.scan()-reachable adjacency), so the
+            // general BFS nuke sweep (lib/daemon_launcher.ts's nukeAndScan) never visits
+            // or roots it even once hacking level clears the requirement. NS root functions
+            // take a hostname string directly and don't require scan-adjacency, so attempt
+            // it here by hostname every tick (cheap no-op once already rooted or if ports
+            // are still insufficient).
+            if (!ns.hasRootAccess('${WORLD_DAEMON_HOST}')) {
+                const openers = [
+                    ['BruteSSH.exe',  h => ns.brutessh(h)],
+                    ['FTPCrack.exe',  h => ns.ftpcrack(h)],
+                    ['relaySMTP.exe', h => ns.relaysmtp(h)],
+                    ['HTTPWorm.exe',  h => ns.httpworm(h)],
+                    ['SQLInject.exe', h => ns.sqlinject(h)],
+                ];
+                for (const [file, open] of openers) {
+                    if (ns.fileExists(file)) { try { open('${WORLD_DAEMON_HOST}'); } catch {} }
+                }
+                try { ns.nuke('${WORLD_DAEMON_HOST}'); } catch { /* not enough ports open yet */ }
+            }
             const hasRoot = ns.hasRootAccess('${WORLD_DAEMON_HOST}');
             let allBlackOpsComplete = false;
             try {

@@ -25,6 +25,8 @@ export interface BrainSettings {
 	autoSleeve:         boolean;   // default false — sleeves (SF10/BN10)
 	autoStanek:         boolean;   // default false — Stanek's Gift (BN13/SF13)
 	autoGrafting:       boolean;   // default false — grafting (BN10/SF10)
+	autoCrime:          boolean;   // default false — crime/training ladder (SF4)
+	autoDonate:         boolean;   // default false — faction donation to unlock rep-blocked augs (irreversible spend)
 	// Already-autonomous engines, now under the unified model (default ON to preserve behavior):
 	autoHacknet:        boolean;   // default true  — hacknet node/hash manager
 	autoStock:          boolean;   // default true  — stock trading engine
@@ -53,6 +55,8 @@ export const DEFAULT_SETTINGS: BrainSettings = {
 	autoSleeve:          false,
 	autoStanek:          false,
 	autoGrafting:        false,
+	autoCrime:           false,
+	autoDonate:          false,
 	autoHacknet:         true,
 	autoStock:           true,
 	brainRamFloorGb:     16,
