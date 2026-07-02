@@ -23,3 +23,14 @@ export function checkOwnSF(ns: NS, sfNumber: number, lvl = 0): boolean {
 export function hasSF4(ns: NS): boolean {
     return checkOwnSF(ns, 4);
 }
+
+/**
+ * Owned level of a given source file, via the same ns.getResetInfo() lookup
+ * checkOwnSF uses (flat 1 GB, no SF4 gate — see checkOwnSF's doc comment above
+ * for why the Singularity equivalent, ns.singularity.getOwnedSourceFiles(), is
+ * avoided). Returns 0 if the source file isn't owned (ownedSF only lists
+ * entries with active level > 0, so a missing key means level 0).
+ */
+export function getSFLevel(ns: NS, sfNumber: number): number {
+    return ns.getResetInfo().ownedSF.get(sfNumber) ?? 0;
+}
