@@ -1,6 +1,8 @@
 # Design 12 — Navigation & Interaction Layer (Action Registry + act() Service)
 
-**Status:** DRAFT — doc-first, not yet built. Companion to [[06-ui-navigation]] (page-level nav), [[10-parallel-build-playbook]] (build process), [[05-thread-p-sequencing]] (the brain).
+**Status:** NOT NEEDED for any currently-scheduled roadmap item (re-audited 2026-07-02) — do not build the registry/`act()` service/Playwright-recon pipeline below without a concrete new use case. Companion to [[06-ui-navigation]] (page-level nav), [[10-parallel-build-playbook]] (build process), [[05-thread-p-sequencing]] (the brain).
+
+> **2026-07-02 finding:** every action this doc's own registry targets in [[14-roadmap-to-full-autoplay]]'s Round 3 (company work, faction donation, grafting travel) turned out to have a plain `ns.singularity.*` equivalent with no DOM/`isTrusted` involvement at all — reachable through the same `executeCommand()`/`lib/ns_dodge.ts` idiom `faction_manager.ts`/`crime.ts` already use. The `isTrusted` blocks §1 catalogues only gate the **human UI's** onClick handlers, not the parallel Singularity API, and doc 00 already ratifies that pre-SF4 automation of these same actions is out of scope by design. Company work landed directly in `faction_manager.ts` this way (no `act()` layer, no DOM). The one action class that genuinely has no Singularity equivalent — casino blackjack — is a multi-turn interactive loop, not a single named click-action, so this doc's per-action registry shape wouldn't fit it anyway; it isn't on any scheduled round. If a future action class turns up that's genuinely DOM-only, re-evaluate this doc then — don't resurrect it speculatively.
 
 **Capability boundary (ratified):** automate ACTION (invoke the game's own click handlers — same as a human clicking) NOT data access. We drive the UI; we never read hidden game state through the fiber.
 

@@ -54,34 +54,45 @@ No business logic or thresholds changed — pure launch-primitive swap. Not live
 in §1) but preemption already worked before this via the direct pressure-polling path, so this is
 confirmed-safe consistency cleanup, not a behavior change.
 
-## 3. `src/player/corp_manager.ts` — still a deliberate stub
+## 3. `src/player/corp_manager.ts` — DONE (2026-07-02), v1 scope, needs live verification
 
-25 lines, publishes `{available: false, headline: 'Corp — automation deferred'}` on a timer and does
-nothing else. No corporation API calls at all. Full corp automation is a from-scratch build, not a
-partial fix — flagged repeatedly as too large/risky to attempt without live testing time.
+Built via a git-worktree parallel session alongside 5 other items (see item 8). v1 is
+deliberately narrow: one corporation, one Agriculture division, Sector-12 only, initial
+office/warehouse size, round-robin hiring (no `setJobAssignment`), no product-design loop.
+Founding is gated behind a single `corpInvest`/`corpFound` decision (~$324b total). Explicitly
+deferred to a v2 pass: office/warehouse upgrades, AdVert, research, a second division/city,
+investor/IPO mechanics.
 
-## 4. `docs/mcp/plan-mcp-reliability.md` Problem 3 — player-module RAM audit (still open)
+**Known risk, not a bug:** this daemon's static RAM cost is unusually large (~220-230 GB,
+summing every distinct `ns.corporation.*` function it touches) — inherent to the corp API
+surface, not a regression. A save can't even afford to found a corp without ~$324b liquid,
+which implies enormous home RAM already exists from compute-layer reinvestment by that point,
+but don't chase this as a bug if a future debugging session notices it.
 
-Run `calculate_ram` against every `src/player/*.js`. `contract_solver` reportedly costs 22GB and
-should only need `ns.codingcontract.*` + a pure-JS BFS/solver — audit its imports for anything
-pulling in `ns_dodge`/formulas/the compute stack unnecessarily.
+## 4. `docs/mcp/plan-mcp-reliability.md` Problem 3 — DONE (audited 2026-07-02, not a bug)
 
-## 5. `docs/design/14-roadmap-to-full-autoplay.md` gaps (still accurate as of this audit)
+`contract_solver.ts`'s 22 GB has zero unnecessary imports — it's the intrinsic, unavoidable
+cost of the three `ns.codingcontract.*` calls (`getContractType`+`getData`+`attempt`) any
+solver must make, verified against `bitburner-src`'s RAM cost tables. The doc's original
+diagnosis (assumed heavy/unused imports) was wrong; corrected in place. No code change needed
+or possible here — this is a sequencing constraint (needs ~16GB+ free home RAM to run), not a
+defect. The doc's Fix Option 2 (a RAM-gate before launching contract_solver) is still a
+reasonable, not-yet-built follow-up if contract-solving needs to work on very small saves.
 
-- Reset loop: `installAugmentations` exists but hasn't been exercised live end-to-end yet.
-- BitNode selection: `player/bitnode_selector.ts` not yet built.
-- Action-level navigation (`act()` layer per `docs/design/12`) — undesigned into code, Round 2.
-- Crime not wired into `DAEMON_CATALOG`/sequencer (Round 1D).
-- Company work missing — blocks progress with 8+ factions that require it (Round 3A gap #4).
-- Grafting manager is report-only (gap #7 — see item 1 above, now has a concrete decision-kind).
-- Aug pricing ignores SF11 cost-reduction and has no donation-based purchase path (gap #8).
-- Bladeburner Black Ops not surfaced (gap #6 — see item 1 above).
-- `stock/main.ts`: `purchaseProfitPotential`/`profitChange` tracking not implemented (sell-signal gap).
-- Script-audit pass (`docs/design/13`'s matrix) not yet fully executed (Round 1E).
-- Console "offline" indicator not built (Round 1F).
-- `docs/design/12` §8's five open sub-questions (travel-confirm dialog, apply-for-job `isTrusted`
-  audit, MUI Select fiber manipulation, multi-step nav render-stabilization, port-based SF4
-  feedback) — block Round 2 detail work, currently only captured as questions.
+## 5. `docs/design/14-roadmap-to-full-autoplay.md` gaps — mostly closed 2026-07-02
+
+- ~~Reset loop~~ — DONE (a prior session); still needs a live end-to-end smoke test (approve → confirm actual reset+reboot fires).
+- ~~BitNode selection~~ — DONE (2026-07-02), `player/bitnode_selector.ts`, "suggest + approve" mode. Also fixed: `w0r1d_d43m0n` has no network-topology entry so the BFS nuke sweep never reached it — now roots it by hostname directly. Needs live verification once a BitNode is actually beatable.
+- ~~Action-level navigation (`act()` layer, `docs/design/12`)~~ — **re-audited, not needed.** Every action that would have used it (company work, aug donation, grafting travel) has a plain `ns.singularity.*` equivalent via the existing `ns_dodge` idiom. `docs/design/12` marked NOT NEEDED; do not build it without a genuinely new DOM-only use case.
+- ~~Crime not wired~~ — DONE (2026-07-02), refactored to the manager idiom + registered under `autoCrime`. Also fixed a real bug found along the way: training silently no-op'd outside Sector-12.
+- ~~Company work missing~~ — DONE (2026-07-02), folded into `faction_manager.ts`'s existing work-target loop (not a separate daemon — would race for the single current-work slot).
+- Grafting manager — still open: has a decision-kind (item 1) but doesn't auto-travel to New Tokyo yet (reports "[not in New Tokyo]" rather than fixing it). Small follow-up, same `ns_dodge` idiom as everything else.
+- ~~Aug pricing ignores SF11 / no donation path~~ — DONE (2026-07-02). Needs live verification (donation candidate surfacing + the `--donate` CLI mode).
+- ~~Bladeburner Black Ops not surfaced~~ — done a prior session.
+- ~~`stock/main.ts` sell-signal tracking~~ — DONE (2026-07-02). Also fixed a real dead-code bug: `purchasePrice`/`isShort` were never set, so the entire trailing-stop/profit-target exit ladder had never fired in live play. **This is a real trading-behavior change, not yet observed live — watch for it.**
+- Script-audit pass (`docs/design/13`'s matrix) not yet fully executed (Round 1E) — still open.
+- Console "offline" indicator not built (Round 1F) — still open.
+- `docs/design/12` §8's five open sub-questions — moot, that doc is no longer being built.
 
 ## 6. Smaller `TODO(design)` markers (feature gaps, not urgent, not residue)
 
@@ -89,16 +100,15 @@ pulling in `ns_dodge`/formulas/the compute stack unnecessarily.
 - `compute/pserv_manager.ts` — full time-decay reserve-by-time model.
 - `compute/scheduler.ts` — integrate the `PORT_BUS_TASK` protocol; adopt alainbryden bin-packing.
 - `compute/coordinator.ts` — phase-aware compute-strategy switch; `PORT_BUS_TASK` publishing;
-  home-reservation doubling on frequent violation.
+  home-reservation doubling on frequent violation; **stock↔hack coupling** (read `PORT_STOCK`,
+  bias grow/hack toward positions) — the data this would consume is now real (item 5 above
+  fixed `profitChange`), but the coordinator-side consumption itself is still unbuilt.
 - `compute/target_selector.ts` — per-thread-efficiency ranking for EARLY phase.
 - `compute/hwgw_batcher.ts` — adopt inigo/alainbryden scheduling patterns; recovery weaken padding
   (`maxTargets` auto-scale may now be partially superseded by the pressure-shrink hook already built).
 - `cross/reporter.ts` — replace file-dump status snapshots with the React dashboard (control console
   already exists per `docs/design/08-control-console.md`; this is about extending it to consume live
   data via DOM injection into `#overview-extra-hook-0`, not building it from scratch).
-- `player/faction_manager.ts` — idle karma-grind fallback when no faction work is available;
-  company-work integration (see item 5).
-- `player/aug_planner.ts` — SF11 reduction factors; donation-based aug purchases (see item 5).
 
 ## 7. Known but low-priority — `lib/connect.ts`'s Wave-0 plan item is obsolete, not missing
 
@@ -106,3 +116,15 @@ An earlier plan called for routing `lib/connect.ts`'s Singularity calls through 
 approach was superseded by a better fix already shipped: `checkOwnSF`/`hasSF4` (now in
 `lib/sf_check.ts`) gate the calls directly, documented in `docs/ram_evasion_rules.md` §6. No action
 needed — noted here only so the old plan item isn't mistaken for outstanding work.
+
+## 8. Live verification pending for everything built 2026-07-02 (corp/crime/company-work/bitnode/aug-donate/stock)
+
+All six of the parallel-built items above typechecked clean but have not been exercised live
+yet (aside from the general daemons already running). Concretely still needed:
+
+- **corp**: approve the `corpFound` decision, confirm the bootstrap sequence actually runs and a division/office/warehouse get created.
+- **crime**: confirm it ticks, trains (including the Sector-12 travel fix), and commits crimes when `autoCrime` is on.
+- **company-work**: confirm `faction_manager.ts` actually applies to and works for a company when a joined-faction gate requires it.
+- **bitnode-selector**: can't fully verify until a BitNode is actually beatable — at minimum confirm it runs without crashing and publishes status.
+- **aug-donation**: confirm a donation candidate surfaces correctly and the `--donate` CLI mode + player_sequencer's cooldown-file write (deny/defer) work.
+- **stock sell-signal**: watch for the new exit-trigger log lines (`Position management EXIT (<SYM>): ...`) — this resurrected a previously-dead trading code path that's never fired before; confirm it behaves sanely, not just that it fires.

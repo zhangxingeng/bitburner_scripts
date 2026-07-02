@@ -2,7 +2,7 @@
 
 **Status:** RATIFIED 2026-06-30. The actionable spine. This doc sequences everything else.
 
-**Companions:** [[12-navigation-interaction-layer]] (the act() layer), [[13-test-harness-and-script-audit]] (how we prove it runs), [[05-thread-p-sequencing]] (the brain), [[11-subsystem-autonomy-and-console-v2]] (managers + console), [[10-parallel-build-playbook]] (how we build concurrently).
+**Companions:** [[12-navigation-interaction-layer]] (re-audited 2026-07-02: NOT needed for anything below — see that doc's status note), [[13-test-harness-and-script-audit]] (how we prove it runs), [[05-thread-p-sequencing]] (the brain), [[11-subsystem-autonomy-and-console-v2]] (managers + console), [[10-parallel-build-playbook]] (how we build concurrently).
 
 ---
 
@@ -28,13 +28,13 @@ We are NOT there. We have a strong skeleton and most of the limbs, but **the pre
 - `dev/cheat.js` redesigned **surgical** (no-op unless a knob is named; blanket grants mask bugs).
 
 **The honest gaps (why it can't yet play the whole game):**
-1. **The reset loop never closes** — `ns.singularity.installAugmentations(...)` is called *nowhere*. We buy augs and never install them. (audit gap #1) — **still open.**
+1. ~~**The reset loop never closes**~~ — **CLOSED** (before this doc's last update — `player_sequencer.ts`'s `AUG_DECISION_ID` block calls `aug_planner --install`, which calls `ns.singularity.installAugmentations`). Built and typechecked; **still needs a live end-to-end smoke test** (approve the decision, confirm the actual reset+reboot fires) — not yet done.
 2. ~~**Terminal injection silently fails off the Terminal page**~~ — **CLOSED 2026-07-01.** `game_agent.ts`'s three terminal-injection call sites (control-channel `handleControlCmd`, the file-relay `executeCommand`, and the legacy `processLauncherCommands`) now all call `runTerminalCommandEnsured` (`cross/launcher.ts`), which calls `ensureTerminal()` (`lib/navigator.ts`) and polls for the Terminal page to become active before injecting — previously only the file-relay path attempted this, and even `launcher.ts`'s own `runTerminalCommand` primitive only *signaled* the caller to retry rather than actually waiting. See [[15-ram-evasion-rules]]'s sibling doc note and Round 1 track 1C below.
-3. **No action-level navigation** — the brain can switch sidebar pages but cannot click in-page controls (travel, apply-for-job, buy-aug, donate, assign-sleeve). → [[12-navigation-interaction-layer]] — **still open.**
-4. **Crime never fires** — `crime.ts` works but isn't in the registry; karma grind (gates Daedalus, etc.) never happens. (gap #2) — **still open.**
-5. **Company work missing** — megacorp faction invites never arrive → 8+ factions and their exclusive augs are unreachable. (gap #4) — **still open.**
-6. **BitNode selection missing** — after a reset the brain would stall at the BitVerse. (gap #5) — **still open.**
-7. Smaller: grafting is report-only (gap #7), aug pricing ignores SF11 + can't donate (gap #8), bladeburner Black Ops aren't surfaced (gap #6), `contract_solver` is 22 GB (gap #9), stock↔hack coupling unbuilt (gap #10). — **all still open.**
+3. ~~**No action-level navigation**~~ — **RE-AUDITED 2026-07-02, not actually a blocker:** every action below (company work, aug donation, grafting travel) turned out to have a plain `ns.singularity.*` equivalent reachable via the existing `ns_dodge` idiom, no DOM/`isTrusted` involvement. See [[12-navigation-interaction-layer]]'s status note — that layer is NOT being built.
+4. ~~**Crime never fires**~~ — **CLOSED 2026-07-02.** `crime.ts` refactored to the manager idiom (settings-gated, `saveSubsystem`-publishing, SF4-guarded) and registered in `lib/manager_registry.ts` under `autoCrime`.
+5. ~~**Company work missing**~~ — **CLOSED 2026-07-02.** Folded into `faction_manager.ts`'s existing work-target loop (data-driven `getFactionInviteRequirements` parse, not a separate daemon — see track 3A below for why).
+6. ~~**BitNode selection missing**~~ — **CLOSED 2026-07-02 (v1).** New `player/bitnode_selector.ts`, "suggest + approve" mode (every jump requires an explicit decision-queue approval, matching this doc's own §8 Q3 default). Not yet live-verified (no BitNode has been beatable in the current dev save at time of writing).
+7. Smaller: grafting is report-only (gap #7, still open — New Tokyo auto-travel not built), aug pricing now SF11-aware + donation-capable (gap #8 — **CLOSED 2026-07-02**), bladeburner Black Ops now surfaced (gap #6 — closed a prior session), `contract_solver`'s 22 GB is **NOT a bug** (gap #9 — audited 2026-07-02, see §5 below), stock↔hack coupling still unbuilt (gap #10 — still open, though the stock engine's own sell-signal tracking was fixed 2026-07-02, a prerequisite for this gap).
 
 ---
 
@@ -67,9 +67,9 @@ doc is the canonical "current state" reference:
   stack (`RamManager`) always had — the two disagreed about how much home RAM was actually free.
 - **MCP is explicitly scoped as dev/debug tooling only**, never a runtime dependency of `brain.ts` —
   see `docs/mcp/mcp-control-channel-usage.md` §0.
-- This does not change §2–§7 below — the reset loop, nav/action layer, crime, company work, and
-  BitNode selection gaps are orthogonal to this pivot and remain exactly as described. Round 1's
-  scope (§4) is unaffected except where noted inline (tracks 1C and 1G, below).
+- §2-§7 below are now stale in places re: the reset loop, nav/action layer, crime, company work,
+  and BitNode selection gaps — all closed or reassessed 2026-07-02, see §1 above for current state.
+  Round 1's scope (§4) is unaffected except where noted inline (tracks 1C and 1G, below).
 
 ---
 
@@ -78,15 +78,17 @@ doc is the canonical "current state" reference:
 Most of the top-10 are leaves. **The spine — the few things that turn a pile of managers into a self-perpetuating player — is small:**
 
 ```
-   [Make-it-run]            [Close-the-loop]              [Act-in-UI]
-  ensureTerminal  ──►  installAugmentations (reset)  ──►  nav layer (act)
-  script audit         + BitNode select (next BN)         └─► company work
-  crime wired                                                 └─► full faction/aug reach
+   [Make-it-run]            [Close-the-loop]                [Full faction/aug reach]
+  ensureTerminal  ──►  installAugmentations (reset)  ──►  company work (faction_manager.ts)
+  script audit         + BitNode select (next BN)         aug donation (aug_planner.ts)
+  crime wired
 ```
 
-`ensureTerminal` + the script audit make the foundation trustworthy. `installAugmentations` + BitNode-select close the autonomy loop (this is the single highest-leverage work). The nav layer unlocks everything that needs an in-page click — most importantly **company work**, which is the gate to the back half of the faction/aug tree.
+**2026-07-02 correction:** the middle column originally routed through a planned "nav layer (act)" — that layer turned out to be unnecessary (see [[12-navigation-interaction-layer]]'s status note). Company work and aug donation both landed as plain `ns.singularity.*` calls via the existing `ns_dodge` idiom, directly in `faction_manager.ts`/`aug_planner.ts`, with no DOM/registry involved.
 
-Three of the four spine items (`ensureTerminal`, reset call, crime wiring) are **Small**. We can close the autonomy loop in Round 1. (`ensureTerminal` wiring is now DONE — see §1a and track 1C below; the remaining Round-1 spine is the reset call, BitNode select, and crime wiring.)
+`ensureTerminal` + the script audit make the foundation trustworthy. `installAugmentations` + BitNode-select close the autonomy loop (this was the single highest-leverage work — both now built, pending live verification).
+
+Three of the four original spine items (`ensureTerminal`, reset call, crime wiring) were **Small**, and all are now done. (`ensureTerminal` wiring — see §1a and track 1C below; reset call — track 1A; crime wiring — track 1D; BitNode select — track 1B.)
 
 ---
 
@@ -95,8 +97,8 @@ Three of the four spine items (`ensureTerminal`, reset call, crime wiring) are *
 | Capability | "Can the brain…" | Owner doc | State |
 |---|---|---|---|
 | **RUN** | …launch every script without it insta-crashing? | [[13-test-harness-and-script-audit]] | harness designed; 2 bugs fixed; full audit pass pending |
-| **ACT** | …perform any in-page action by ID (DOM-first, SF4 fallback, RAM-aware)? | [[12-navigation-interaction-layer]] | designed; not built |
-| **DECIDE+LOOP** | …run the full lifecycle incl. reset + BitNode, surfacing only judgment calls? | this doc §4 + [[05-thread-p-sequencing]] | skeleton works; loop doesn't close |
+| **ACT** | …perform any in-page action by ID (DOM-first, SF4 fallback, RAM-aware)? | [[12-navigation-interaction-layer]] | **not needed** — every currently-scheduled action has a plain `ns.singularity.*`/`ns_dodge` equivalent (re-audited 2026-07-02) |
+| **DECIDE+LOOP** | …run the full lifecycle incl. reset + BitNode, surfacing only judgment calls? | this doc §4 + [[05-thread-p-sequencing]] | reset + BitNode-select built 2026-07-02, pending live verification |
 
 Full autoplay = all three, wired together by the sequencer.
 
@@ -112,10 +114,10 @@ Highest leverage, mostly Small. Goal: the brain completes a full prestige cycle 
 
 | Track | Scope | Owner file(s) | Size | Acceptance |
 |---|---|---|---|---|
-| 1A · Reset loop | After `aug_planner --purchase` verifies, call `installAugmentations('/brain.js')` via `ns_dodge`, gated by `autoReset`/decision; handle the reboot | `cross/player_sequencer.ts` | S | dev game: with augs owned + `autoReset` on, brain installs and reboots into brain.js |
-| 1B · BitNode select | Score BNs, pick next, `destroyW0r1dD43m0n(nextBN, '/brain.js')` via `ns_dodge` gated by `autoBitNode`/decision (SF4 path; no DOM needed) | new `player/bitnode_selector.ts` + sequencer hook | M | with daemon beatable + `autoBitNode` on, brain enters next BN; else surfaces a decision |
+| 1A · Reset loop | After `aug_planner --purchase` verifies, call `installAugmentations('/brain.js')` via `ns_dodge`, gated by `autoReset`/decision; handle the reboot | `cross/player_sequencer.ts` | S | ✅ **DONE** (prior session) — dev game: with augs owned + `autoReset` on, brain installs and reboots into brain.js. **Not yet live-verified end-to-end.** |
+| 1B · BitNode select | Score BNs, pick next, `destroyW0r1dD43m0n(nextBN, '/brain.js')` via `ns_dodge` gated by `autoBitNode`/decision (SF4 path; no DOM needed) | new `player/bitnode_selector.ts` + sequencer hook | M | ✅ **DONE 2026-07-02** — "suggest + approve" mode, priority order derived from bitburner-src's own recommended-order guide, requires 2 consecutive confirming polls before surfacing (safety margin against a stale-read false positive). Also fixed: `w0r1d_d43m0n` has no network-topology entry, so the BFS nuke sweep never roots it — `bitnode_selector.ts` now attempts root by hostname directly. Not yet live-verified (no BitNode has been beatable in the current dev save). |
 | 1C · ensureTerminal | ~~Call `ensureTerminal()` before every terminal injection~~ **DONE 2026-07-01** — all three `game_agent.ts` injection call sites now go through `runTerminalCommandEnsured` | `cross/launcher.ts`, `cross/game_agent.ts` | S | ✅ injection works regardless of current page (verified via tsc; live-game re-verification still recommended) |
-| 1D · Crime wired | Add `autoCrime` setting + `crime` entry to registry; sequencer launches it; faction_manager falls back to karma grind when idle | `lib/settings.ts`, `lib/manager_registry.ts`, `cross/player_sequencer.ts`, `player/faction_manager.ts` | S | dev game: idle brain commits crime; karma drops |
+| 1D · Crime wired | Add `autoCrime` setting + `crime` entry to registry; sequencer launches it; faction_manager falls back to karma grind when idle | `lib/settings.ts`, `lib/manager_registry.ts`, `cross/player_sequencer.ts`, `player/faction_manager.ts` | S | ✅ **DONE 2026-07-02** — `crime.ts` refactored to the manager idiom + registered. **Correction:** faction_manager does NOT fall back to launching crime (no manager launches another manager in this codebase) — crime runs independently under its own `autoCrime` toggle; faction_manager's stale references to it were removed. |
 | 1E · Script audit pass | Execute the [[13-test-harness-and-script-audit]] §3 matrix under surgical cheats; record PASS/FAIL; file small disjoint fixes; encode §4.3 smoke as a repeatable MCP sequence | `docs/design/13` matrix + tiny fixes | M | every script in the matrix has a PASS or a logged, ticketed FAIL |
 | 1F · Console "offline" | Console shows "⚠ sequencer offline / no producer" when `player_state.json` is stale, instead of silent stale dots | `ui/control_console.tsx`, `ui/panels/subsystems_panel.tsx` | S | with no sequencer running, panels say offline (the exact confusion that started this round) |
 | 1G · Terminal submit | ~~**CONFIRMED bug** (design/13 §8.3): `runTerminalCommand`'s captured `onKeyDown` reads stale React state~~ — **ALREADY RESOLVED** by the time of this update: the current `runTerminalCommand` uses the native-value-setter + dispatched `input`/`keydown` events approach (not the old captured-handler approach this gap described), and 1C above additionally wires the ensure-Terminal-first fix into every call path. Blast radius was MCP/control + dev path only (the brain uses `ns.exec`/`requestRun` for daemon launches, not terminal injection) | `cross/launcher.ts` | S | ✅ resolved |
@@ -124,24 +126,24 @@ Highest leverage, mostly Small. Goal: the brain completes a full prestige cycle 
 
 **RAM:** all Round-1 additions ride existing `ns_dodge` (~0 GB to the sequencer). No new resident footprint.
 
-### Round 2 — Navigation / interaction layer
+### Round 2 — Navigation / interaction layer — **SKIPPED, not needed (2026-07-02)**
 
-The full [[12-navigation-interaction-layer]] sub-venture: Wave-0 freezes `lib/actions/registry.ts` + `service.ts` types; Wave-1 = 6 disjoint agents (`dom/travel`, `dom/faction`, `dom/augmentation`, `dom/sleeve`, `sf4.ts`, `dev/selector_recon.ts`); Wave-2 integrates `act()` into the sequencer + Tier-1 (Playwright) + Tier-2 (Steam) verify. Resolve design/12 §8 open questions (apply-for-job isTrusted audit, MUI Select fiber, travel-confirm dialog) during Wave-1. **0 GB DOM path; SF4 via `ns_dodge`.**
+~~The full [[12-navigation-interaction-layer]] sub-venture: Wave-0 freezes `lib/actions/registry.ts` + `service.ts` types; Wave-1 = 6 disjoint agents (`dom/travel`, `dom/faction`, `dom/augmentation`, `dom/sleeve`, `sf4.ts`, `dev/selector_recon.ts`); Wave-2 integrates `act()` into the sequencer + Tier-1 (Playwright) + Tier-2 (Steam) verify.~~ Re-audited 2026-07-02: every Round 3 action below has a plain `ns.singularity.*` equivalent with no DOM/`isTrusted` involvement — see [[12-navigation-interaction-layer]]'s status note. Round 3 does not depend on this round; it never got built.
 
-### Round 3 — Autonomy depth (needs Round 2's `act()`)
+### Round 3 — Autonomy depth
 
-Parallelizable; mostly disjoint manager files.
+Parallelizable; mostly disjoint manager files. (Originally scoped as "needs Round 2's `act()`" — that dependency turned out to be false, see above; all of Round 3 was built directly via `ns_dodge`.)
 
-| Track | Scope | Owner file(s) | Size |
-|---|---|---|---|
-| 3A · Company work | apply + work via `act('apply-for-job')`/SF4 → unlock megacorp factions | new `player/company_manager.ts` + registry + sequencer | L |
-| 3B · Aug strategy depth | SF11 cost multiplier; donation-based purchase via `act('donate-to-faction')` | `player/aug_planner.ts` | S+M |
-| 3C · Grafting | `graftAugmentation()` behind `autoGrafting` + decision + New Tokyo travel via `act()` | `player/grafting_manager.ts` | S |
-| 3D · Bladeburner Black Ops | surface `bladeOp` decision when rank threshold met | `player/bladeburner_manager.ts` | S |
-| 3E · contract_solver slim | refactor 22 GB direct-Singularity imports to `ns_dodge`; enable auto-solve | `player/contract_solver.ts` | L |
-| 3F · Stock↔hack coupling | coordinator reads `PORT_STOCK`, biases grow/hack toward positions | `compute/coordinator.ts`, `stock/main.ts` | M |
+| Track | Scope | Owner file(s) | Size | Status |
+|---|---|---|---|---|
+| 3A · Company work | ~~apply + work via `act('apply-for-job')`/SF4~~ → data-driven `getFactionInviteRequirements` parse + `applyToCompany`/`workForCompany` via `ns_dodge`, folded into the existing work-target loop (NOT a separate daemon — `workForCompany`/`workForFaction` share the single current-work slot, a standalone daemon would race `faction_manager.ts` for it) | `player/faction_manager.ts` (in-place extension, no new file) | L | ✅ **DONE 2026-07-02** |
+| 3B · Aug strategy depth | SF11 cost multiplier; donation-based purchase via `ns.singularity.donateToFaction` (no `act()` needed) | `player/aug_planner.ts`, `lib/sf_check.ts` (new `getSFLevel`), `cross/player_sequencer.ts` (donation decision drain) | S+M | ✅ **DONE 2026-07-02** |
+| 3C · Grafting | `graftAugmentation()` behind `autoGrafting` + decision (done a prior session) + New Tokyo auto-travel | `player/grafting_manager.ts` | S | still open — grafting reports "[not in New Tokyo]" but doesn't auto-travel there yet; small follow-up, plain `ns.singularity.travelToCity` via `ns_dodge`, same idiom as everything else in this round |
+| 3D · Bladeburner Black Ops | surface `bladeOp` decision when rank threshold met | `player/bladeburner_manager.ts` | S | ✅ done a prior session |
+| 3E · contract_solver slim | ~~refactor 22 GB direct-Singularity imports to `ns_dodge`~~ | `player/contract_solver.ts` | L | ❌ **not a bug — audited 2026-07-02.** No Singularity imports exist; the 22 GB is the intrinsic, unavoidable cost of `ns.codingcontract.attempt/getContractType/getData` (verified against bitburner-src's RAM cost tables). Nothing to refactor. See `docs/mcp/plan-mcp-reliability.md`'s corrected Problem 3. |
+| 3F · Stock↔hack coupling | coordinator reads `PORT_STOCK`, biases grow/hack toward positions | `compute/coordinator.ts`, `stock/main.ts` | M | still open — but `stock/main.ts`'s own sell-signal tracking (a prerequisite: `PORT_STOCK`'s `profitChange` field was previously hardcoded to 0) was fixed 2026-07-02, so the data this track would consume is now real |
 
-After Round 3 the brain plays a full BitNode end-to-end with all unlocked subsystems active.
+After Round 3, the brain plays a full BitNode end-to-end with all unlocked subsystems active (pending 3C, 3F, and live verification of everything above).
 
 ---
 
@@ -156,7 +158,7 @@ Always design to the home-RAM tier. Resident floor: `game_agent` ~6.65 GB is alw
 | 18+ GB | + hacknet_manager (~9.45 GB) |
 | 64+ GB | + coordinator (~15.85 GB) — MID-phase HWGW |
 
-Rules: every Singularity call goes through `ns_dodge` (the caller pays ~0; the temp script pays the real cost and must fit free home RAM *at launch* — the nav layer pre-checks this). The nav DOM path is 0 GB and always preferred. `contract_solver` (22 GB) is the one violator and gets the `ns_dodge` refactor in Round 3.
+Rules: every Singularity call goes through `ns_dodge` (the caller pays ~0; the temp script pays the real cost and must fit free home RAM *at launch*). `contract_solver`'s 22 GB is NOT a `ns_dodge` violation — audited 2026-07-02, it has zero Singularity/heavy imports; the cost is the intrinsic, unavoidable price of the three `ns.codingcontract.*` functions any solver must call. No refactor needed or possible.
 
 ---
 
@@ -174,6 +176,6 @@ Irreversible actions (install/reset, BitNode choice, scarce spends) default to *
 
 ## §8 Open questions for the user
 
-1. **Round order** — recommended: **Round 1 now** (closes the loop; small + high-leverage), then Round 2 (nav), then Round 3. Alternative: nav first if you want to *see* the brain clicking sooner. Default = Round 1 first.
-2. **Reset autonomy for first validation** — when we test the closed loop, run it with `autoReset` ON (brain installs on its own) or keep it decision-gated (human approves the first few)? Default = decision-gated until we trust it.
-3. **BitNode strategy** — any preferred BitNode order, or let the scorer choose by SF-gap/reward? Default = scorer picks, surfaced for approval.
+1. ~~**Round order**~~ — resolved: Round 1 and Round 3 are both done; Round 2 was skipped as unneeded (see §4).
+2. **Reset autonomy for first validation** — when we test the closed loop, run it with `autoReset` ON (brain installs on its own) or keep it decision-gated (human approves the first few)? Default = decision-gated until we trust it. Still open — not yet live-tested either way.
+3. ~~**BitNode strategy**~~ — resolved 2026-07-02: no response to a direct ask, proceeded with the default — scorer picks (from bitburner-src's own recommended-order guide), surfaced for approval via the decision queue. `bitnode_selector.ts` built exactly this way; a `bitNodeGoalOrder` settings override was deliberately left out of v1 (easy to add later, the hardcoded order isolates cleanly).

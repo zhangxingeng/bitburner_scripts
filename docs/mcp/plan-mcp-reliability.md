@@ -84,24 +84,30 @@ for what should be near-real-time in-game I/O.
 **Observed:** `run /player/contract_solver.js` requires **22 GB RAM** — cannot run on 16 GB
 home with bootstrap (4.8 GB) + game_agent (6.65 GB) running (only ~4.5 GB free).
 
-**Scope:** Audit ALL player modules for RAM cost. The current imports likely drag in heavy
-libs. Expected: any module importing `ns_dodge`, formulas, or the full compute stack will be
-heavy.
+**AUDITED 2026-07-02 — this section's original diagnosis was wrong.** `contract_solver.ts`
+has exactly one import (`NS` from `@ns`, type-only — zero RAM cost) and no `ns_dodge`,
+formulas, singularity, or compute-stack imports anywhere. Every line below `solveContract()`
+(all the individual contract-type solvers) is pure JS with zero `ns.*` calls. The 22 GB is
+the exact, unavoidable sum of the three `ns.codingcontract.*` calls any solver must make:
+`getContractType` (5 GB) + `getData` (5 GB) + `attempt` (10 GB), plus the 1.6 GB script base
+and 0.4 GB for `ns.scan`/`ns.ls` — verified against `bitburner-src`'s `RamCostGenerator.ts`.
+**There is nothing to "lean up" — Fix Option 1 below does not apply and should not be
+attempted.** A spot-check of every other `src/player/*.ts` file found the same: no unused
+imports, no accidental heavy-namespace pollution (files that need Singularity already route
+through `lib/ns_dodge.ts`/`lib/sf_check.ts` correctly).
 
-**Fix options (in order of preference):**
-1. **Lean up the modules** — audit imports; remove anything not used; split heavy one-time
-   setup from lightweight runtime. `contract_solver` in particular should be able to run
-   lean: it needs `ns.codingcontract.*` (cheap), BFS scan (cheap), and solve logic (pure JS,
-   no ns.*). Remove any ns_dodge or heavy imports.
+**Still-relevant fix options, now correctly ordered:**
+1. ~~Lean up the modules~~ — **does not apply**, see above. Do not re-attempt an import audit
+   on `contract_solver.ts` expecting to find something to cut.
 2. **RAM gate in game_agent** — before injecting a `run /player/<module>.js` command, check
    `ns.getServerFreeRam('home') >= ns.getScriptRam(script)`. If not enough RAM, push a
    `NOT_ENOUGH_RAM` receipt to PORT_NOTIFY instead of injecting. Agent can read this and retry
-   later or surface it to the user.
+   later or surface it to the user. Still a reasonable follow-up, not yet built.
 3. **Document RAM requirements** — at minimum, list each player module's RAM cost so the
-   agent knows when it can and cannot trigger them.
+   agent knows when it can and cannot trigger them. Still a reasonable follow-up.
 
-**Immediate audit:** run `calculate_ram /player/contract_solver.js` and every other player/
-module in-game to get real numbers. Then identify which imports to cut.
+Bottom line: 22 GB for a contract solver on an early-game 16 GB home is a real *sequencing*
+constraint (don't expect to auto-solve contracts before home RAM grows), not a code defect.
 
 ---
 
