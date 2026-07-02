@@ -447,6 +447,19 @@ export class StockMarket {
             price = expectedPrice;
         }
 
+        // Snapshot position-open state. Guarded on purchasePrice === undefined so a
+        // future averaging-up feature (buying more into an already-owned stock)
+        // can't silently overwrite the original entry reference. This codebase
+        // currently only ever buys into `!stock.owned()` stocks, so this always
+        // fires on a true fresh-open today.
+        if (stock.purchasePrice === undefined) {
+            stock.purchasePrice = price;
+            stock.isShort = !long;
+            stock.highPrice = price;
+            stock.initialForecast = stock.forecast;
+            stock.purchaseProfitPotential = stock.profitPotential();
+        }
+
         await this.ns.sleep(this.config.tradingParams.tradeCooldown);
 
         return shares * price + this.config.tradingParams.commission;
@@ -504,6 +517,18 @@ export class StockMarket {
         }
 
         this.totalProfit += profit;
+
+        // This codebase always sells the FULL position (never partial), so it's safe
+        // to fully reset all position-scoped fields here. Missing even one (e.g.
+        // leaving isShort=true after closing a short) would corrupt the next
+        // position opened on this symbol.
+        stock.purchasePrice = undefined;
+        stock.totalCost = undefined;
+        stock.purchaseProfitPotential = undefined;
+        stock.isShort = false;
+        stock.highPrice = 0;
+        stock.initialForecast = undefined;
+        stock.warnedBadPurchase = false;
 
         await this.ns.sleep(this.config.tradingParams.tradeCooldown);
 
