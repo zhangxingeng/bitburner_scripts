@@ -117,14 +117,35 @@ approach was superseded by a better fix already shipped: `checkOwnSF`/`hasSF4` (
 `lib/sf_check.ts`) gate the calls directly, documented in `docs/ram_evasion_rules.md` §6. No action
 needed — noted here only so the old plan item isn't mistaken for outstanding work.
 
-## 8. Live verification pending for everything built 2026-07-02 (corp/crime/company-work/bitnode/aug-donate/stock)
+## 8. Live verification of everything built 2026-07-02 — DONE, found and fixed 2 real bugs
 
-All six of the parallel-built items above typechecked clean but have not been exercised live
-yet (aside from the general daemons already running). Concretely still needed:
+All six items were launched live against the running game (not just typechecked). Two genuine
+bugs surfaced — exactly the class of thing `tsc` cannot catch — both fixed and committed:
 
-- **corp**: approve the `corpFound` decision, confirm the bootstrap sequence actually runs and a division/office/warehouse get created.
-- **crime**: confirm it ticks, trains (including the Sector-12 travel fix), and commits crimes when `autoCrime` is on.
-- **company-work**: confirm `faction_manager.ts` actually applies to and works for a company when a joined-faction gate requires it.
-- **bitnode-selector**: can't fully verify until a BitNode is actually beatable — at minimum confirm it runs without crashing and publishes status.
-- **aug-donation**: confirm a donation candidate surfaces correctly and the `--donate` CLI mode + player_sequencer's cooldown-file write (deny/defer) work.
-- **stock sell-signal**: watch for the new exit-trigger log lines (`Position management EXIT (<SYM>): ...`) — this resurrected a previously-dead trading code path that's never fired before; confirm it behaves sanely, not just that it fires.
+- **stock sell-signal**: the resurrected `checkPositionManagement` trailing-stop check ran
+  unconditionally (unlike every sibling check), so it tripped from the bid/ask spread alone
+  0 ticks after a fresh buy — observed live as a real buy/sell/loss thrash on APHE. Fixed by
+  gating it behind `shouldConsiderSelling` like every other exit condition. Re-verified live:
+  clean profit-taking and sensible stop-losses after a proper restart, no more instant-thrash.
+- **bitnode-selector**: `ns.getServer('w0r1d_d43m0n')` throws unconditionally until the player
+  has installed "The Red Pill" (confirmed in bitburner-src — pre-TRP the World Daemon is an
+  "isolated non-dnet server", not just unreachable via scan as originally assumed). This
+  crashed the whole detection snapshot every tick. Fixed by gating the entire World Daemon
+  probe behind `resetInfo.ownedAugs.has('The Red Pill')` (already fetched via `getResetInfo`,
+  zero extra cost). Re-verified live: clean "not yet beatable" status, no crash.
+- **crime**: confirmed live — ticks, trains, and shows correct 100% crime chances across the
+  ladder (this dev save has very high stats).
+- **corp**: confirmed live — correctly self-guards as `available:false` pending SF3/BN3, no
+  crash. The actual founding sequence (`corpFound` decision → bootstrap) was NOT exercised —
+  this dev save's money dropped to ~$14B (partly from the stock-thrash bug above, since fixed)
+  and corp needs ~$324B to bootstrap. Re-verify the founding flow once funds recover or SF3 is
+  granted with enough money.
+- **company-work**: confirmed live — `faction_manager.ts` runs without crashing. The actual
+  company-work-target code path was NOT exercised (no currently-joined faction has an
+  unsatisfied company-rep gate in this save, and the script's `ns.print`-only logging isn't
+  readable through the tools available this session) — reasonably low-risk since it's
+  additive, data-driven logic gated the same way as the rest of this file.
+- **aug-donation**: confirmed live — `aug_planner.js` ran clean, correctly found zero donation
+  candidates because `Formulas.exe` is absent in this save (verified directly) — this is
+  correct behavior per the code's own guard, not a gap in testing. The actual donation
+  surfacing/`--donate` CLI path was NOT exercised — needs Formulas.exe to test meaningfully.
