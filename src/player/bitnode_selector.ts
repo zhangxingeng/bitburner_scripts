@@ -129,28 +129,44 @@ async function gatherSnapshot(ns: NS): Promise<BitNodeSnapshot | null> {
             const ownedSF = {};
             for (const [k, v] of resetInfo.ownedSF) ownedSF[k] = v;
             const player = ns.getPlayer();
-            const wd = ns.getServer('${WORLD_DAEMON_HOST}');
-            // '${WORLD_DAEMON_HOST}' has no network-topology entry (verified against
-            // bitburner-src: it's never linked via ns.scan()-reachable adjacency), so the
-            // general BFS nuke sweep (lib/daemon_launcher.ts's nukeAndScan) never visits
-            // or roots it even once hacking level clears the requirement. NS root functions
-            // take a hostname string directly and don't require scan-adjacency, so attempt
-            // it here by hostname every tick (cheap no-op once already rooted or if ports
-            // are still insufficient).
-            if (!ns.hasRootAccess('${WORLD_DAEMON_HOST}')) {
-                const openers = [
-                    ['BruteSSH.exe',  h => ns.brutessh(h)],
-                    ['FTPCrack.exe',  h => ns.ftpcrack(h)],
-                    ['relaySMTP.exe', h => ns.relaysmtp(h)],
-                    ['HTTPWorm.exe',  h => ns.httpworm(h)],
-                    ['SQLInject.exe', h => ns.sqlinject(h)],
-                ];
-                for (const [file, open] of openers) {
-                    if (ns.fileExists(file)) { try { open('${WORLD_DAEMON_HOST}'); } catch {} }
+            // '${WORLD_DAEMON_HOST}' is registered as an "isolated non-dnet server" until
+            // the player has installed "The Red Pill" (confirmed against bitburner-src's
+            // NetscriptHelpers.tsx getServer() doc comment: "Throw an error if the server
+            // does not exist or is an isolated non-dnet server (e.g. ... pre-TRP WD)") —
+            // ns.getServer/ns.hasRootAccess on this host THROW unconditionally until then,
+            // not just when unreachable via scan. Found live 2026-07-02: this crashed the
+            // whole snapshot every tick pre-TRP, surfacing as a generic "detection failed"
+            // status. ownedAugs is already fetched via getResetInfo (zero extra RAM) and is
+            // keyed by augmentation display name, so gate the entire WD probe on it instead
+            // of guessing from a try/catch around getServer itself.
+            const hasTRP = resetInfo.ownedAugs.has('The Red Pill');
+            let requiredHackingSkill = Infinity;
+            let hasRoot = false;
+            if (hasTRP) {
+                // Network-topology note (still true, independent of the TRP gate above):
+                // '${WORLD_DAEMON_HOST}' has no scan-adjacency entry, so the general BFS
+                // nuke sweep (lib/daemon_launcher.ts's nukeAndScan) never visits or roots
+                // it even once hacking level clears the requirement. NS root functions take
+                // a hostname string directly and don't require scan-adjacency, so attempt
+                // it here by hostname every tick (cheap no-op once already rooted or if
+                // ports are still insufficient).
+                const wd = ns.getServer('${WORLD_DAEMON_HOST}');
+                requiredHackingSkill = wd.requiredHackingSkill ?? Infinity;
+                if (!ns.hasRootAccess('${WORLD_DAEMON_HOST}')) {
+                    const openers = [
+                        ['BruteSSH.exe',  h => ns.brutessh(h)],
+                        ['FTPCrack.exe',  h => ns.ftpcrack(h)],
+                        ['relaySMTP.exe', h => ns.relaysmtp(h)],
+                        ['HTTPWorm.exe',  h => ns.httpworm(h)],
+                        ['SQLInject.exe', h => ns.sqlinject(h)],
+                    ];
+                    for (const [file, open] of openers) {
+                        if (ns.fileExists(file)) { try { open('${WORLD_DAEMON_HOST}'); } catch {} }
+                    }
+                    try { ns.nuke('${WORLD_DAEMON_HOST}'); } catch { /* not enough ports open yet */ }
                 }
-                try { ns.nuke('${WORLD_DAEMON_HOST}'); } catch { /* not enough ports open yet */ }
+                hasRoot = ns.hasRootAccess('${WORLD_DAEMON_HOST}');
             }
-            const hasRoot = ns.hasRootAccess('${WORLD_DAEMON_HOST}');
             let allBlackOpsComplete = false;
             try {
                 allBlackOpsComplete = ns.bladeburner.getNextBlackOp() === null;
@@ -161,7 +177,7 @@ async function gatherSnapshot(ns: NS): Promise<BitNodeSnapshot | null> {
                 currentNode: resetInfo.currentNode,
                 ownedSF,
                 hacking: player.skills.hacking,
-                requiredHackingSkill: wd.requiredHackingSkill ?? Infinity,
+                requiredHackingSkill,
                 hasRoot,
                 allBlackOpsComplete,
             };

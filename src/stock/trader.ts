@@ -245,15 +245,6 @@ export class StockTrader {
         // Check trailing stop - more aggressive if at potential cycle end
         const adjustedTrailingStop = isCycleEnd ? trailingStopPercent * 0.5 : trailingStopPercent;
 
-        // Check if trailing stop is triggered
-        if (!stock.isShort && stock.highPrice && currentPrice < stock.highPrice * (1 - adjustedTrailingStop)) {
-            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
-            return true;
-        } else if (stock.isShort && stock.highPrice && currentPrice > stock.highPrice * (1 + adjustedTrailingStop)) {
-            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
-            return true;
-        }
-
         // Dynamic profit target based on multiple factors
         const forecastStrength = Math.abs(stock.forecast - 0.5);
         const cycleFactor = isCycleEnd ? 0.8 : 1.0;
@@ -269,6 +260,21 @@ export class StockTrader {
             (forecastStrength > 0.25 ? 1 : 0));
 
         const shouldConsiderSelling = (stock.ticksHeld || 0) >= effectiveMinHoldTime;
+
+        // Check if trailing stop is triggered. Gated by shouldConsiderSelling like every
+        // other check below (bug found live 2026-07-02: this check ran unconditionally, so
+        // highPrice — set at buy time from the ask price — got compared against the very
+        // next tick's bid price and tripped the trailing stop purely from the bid/ask
+        // spread, 0 ticks after purchase, causing a real buy/sell/loss thrash. This code
+        // path was dead before purchasePrice tracking was resurrected this session, so the
+        // gap was never exposed until live-testing.
+        if (!stock.isShort && stock.highPrice && currentPrice < stock.highPrice * (1 - adjustedTrailingStop) && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
+            return true;
+        } else if (stock.isShort && stock.highPrice && currentPrice > stock.highPrice * (1 + adjustedTrailingStop) && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
+            return true;
+        }
 
         // Take profit condition
         if (profit >= dynamicTargetProfit && shouldConsiderSelling) {
@@ -338,13 +344,21 @@ export class StockTrader {
 
         const currentPrice = stock.isShort ? stock.ask_price : stock.bid_price;
 
+        // Mirrors checkPositionManagement's shouldConsiderSelling gate on the trailing-stop
+        // check (same bug fix, same reasoning — see that function's comment).
+        const forecastStrength = Math.abs(stock.forecast - 0.5);
+        const effectiveMinHoldTime = Math.max(1, this.config.tradingParams.minHoldTime -
+            (stock.volatility > 0.05 ? 1 : 0) -
+            (forecastStrength > 0.25 ? 1 : 0));
+        const shouldConsiderSelling = (stock.ticksHeld || 0) >= effectiveMinHoldTime;
+
         if (!stock.isShort && stock.highPrice &&
-            currentPrice < stock.highPrice * (1 - 0.02 * (1 + stock.volatility))) {
+            currentPrice < stock.highPrice * (1 - 0.02 * (1 + stock.volatility)) && shouldConsiderSelling) {
             return 'Trailing stop triggered';
         }
 
         if (stock.isShort && stock.highPrice &&
-            currentPrice > stock.highPrice * (1 + 0.02 * (1 + stock.volatility))) {
+            currentPrice > stock.highPrice * (1 + 0.02 * (1 + stock.volatility)) && shouldConsiderSelling) {
             return 'Trailing stop triggered';
         }
 
