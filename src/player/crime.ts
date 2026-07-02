@@ -2,26 +2,58 @@ import { NS, Player } from '@ns';
 import { CrimeType, GymType, UniversityClassType, CrimeStats } from '../lib/types';
 import { shortNumber, formatPercent } from '../lib/format';
 import { executeCommand } from '../lib/ns_dodge';
+import { saveSubsystem } from '../lib/subsystem_state';
+import type { SubsystemStatus } from '../lib/subsystem_state';
+import { loadSettings } from '../lib/settings';
+import type { BrainSettings } from '../lib/settings';
+import { hasSF4 } from '../lib/sf_check';
 
+/**
+ * Crime manager (docs/design/11 idiom) — auto karma/money-crime daemon.
+ *
+ * Contract: a PERSISTENT daemon, mirroring grafting_manager.ts / gang_manager.ts.
+ * Each loop: loadSettings(ns) then hasSF4(ns) FIRST (crime relies entirely on
+ * ns.singularity.* — commitCrime, universityCourse, gymWorkout, travelToCity —
+ * all SF4-gated). If disabled or SF4 absent, publish { available, enabled,
+ * running:false } and idle (DO NOT exit — sequencer keeps it alive so it picks
+ * up availability after a dev-cheat SF grant or a toggle flip).
+ *
+ * Training (university/gym) only works while resident in Sector-12 (Rothman
+ * University + Powerhouse Gym are both Sector-12 locations — see
+ * NetscriptDefinitions.d.ts LocationName enum) — trainStat() travels there
+ * first if needed, otherwise training silently no-ops from any other city.
+ */
 
-/** Training multiplier for actions (how many times to train before checking stats) */
-const TRAINING_MULTIPLIER = 3;
-/** Minimum stats to aim for during pure training */
+/** Local extension until settings.ts grows a real `autoCrime` field (tracked separately). */
+type CrimeSettings = BrainSettings & { autoCrime?: boolean };
+
+/** Minimum stats to aim for during baseline training, one stat-step per tick. */
 const MIN_STAT_THRESHOLD = 100;
 /** Success rate threshold to start training for next crime */
 const TRAINING_THRESHOLD = 0.8;
 /** Success rate threshold to start committing next crime */
 const COMMIT_THRESHOLD = 0.95;
 
-/** Available crimes to consider */
+/** City required for university/gym training (Rothman University, Powerhouse Gym). */
+const SECTOR_12 = 'Sector-12';
+
+/** Availability/disabled idle cadence — mirrors grafting_manager.ts's SLEEP_MS. */
+const IDLE_SLEEP_MS = 10_000;
+
+/** Available crimes to consider, roughly easiest → hardest (re-sorted by live success chance anyway). */
 const AVAILABLE_CRIMES = [
+    CrimeType.shoplift,
+    CrimeType.robStore,
     CrimeType.mug,
-    CrimeType.homicide,
+    CrimeType.larceny,
+    CrimeType.dealDrugs,
+    CrimeType.bondForgery,
     CrimeType.traffickArms,
+    CrimeType.homicide,
     CrimeType.grandTheftAuto,
     CrimeType.kidnap,
     CrimeType.assassination,
-    CrimeType.heist
+    CrimeType.heist,
 ];
 
 /**
@@ -30,20 +62,55 @@ const AVAILABLE_CRIMES = [
  */
 export async function main(ns: NS): Promise<void> {
     ns.disableLog('ALL');
-    ns.ui.openTail();
-    ns.ui.setTailTitle('Auto Crime');
 
-    // Initial pure training phase
-    await pureTrainingPhase(ns);
-
-    // Main crime-training loop
     while (true) {
+        const settings = loadSettings(ns) as CrimeSettings;
+        const enabled = settings.autoCrime ?? false;
+        const available = hasSF4(ns);
+
+        // ── Availability/enabled guard — mirrors grafting_manager.ts exactly ──
+        if (!enabled || !available) {
+            saveSubsystem(ns, {
+                id: 'crime',
+                available,
+                enabled,
+                running: false,
+                headline: available
+                    ? 'Crime idle (autoCrime disabled)'
+                    : 'Crime unavailable (need SF4 / Singularity API)',
+                metrics: {},
+                ts: Date.now(),
+            });
+            await ns.sleep(IDLE_SLEEP_MS);
+            continue;
+        }
+
+        // ── Per-tick baseline training check (one stat-step per tick — reacts
+        // to the toggle within a single tick instead of a blocking pre-loop
+        // training phase) ──────────────────────────────────────────────────
+        const player = ns.getPlayer();
+        if (!checkAllStatsAboveThreshold(player)) {
+            const lowestStat = findLowestStat(player);
+            saveSubsystem(ns, {
+                id: 'crime',
+                available: true,
+                enabled,
+                running: true,
+                headline: `Training ${lowestStat.name} (${lowestStat.value}) toward ${MIN_STAT_THRESHOLD} baseline`,
+                metrics: { statTraining: lowestStat.name, statValue: lowestStat.value },
+                ts: Date.now(),
+            });
+            await trainStat(ns, lowestStat.name);
+            continue;
+        }
+
         // Build the dynamic crime ladder based on current success rates
         const crimeLadder = await buildCrimeLadder(ns);
-        const player = ns.getPlayer();
 
         // Find the current crime index (highest crime with sufficient success rate)
         const currentCrimeIndex = await findCurrentCrimeIndex(ns, crimeLadder);
+
+        let headline: string;
 
         // Check if we should commit current crime or train for next
         if (currentCrimeIndex >= 0) {
@@ -58,23 +125,30 @@ export async function main(ns: NS): Promise<void> {
                 if (nextCrimeRate >= COMMIT_THRESHOLD) {
                     // Good enough success rate, commit next crime
                     await myCommitCrime(ns, nextCrime);
+                    headline = `Committed ${nextCrime}`;
                 } else {
                     // Train to improve for next crime
                     await trainForCrime(ns, nextCrime);
+                    headline = `Training toward ${nextCrime}`;
                 }
             } else {
                 // Commit current crime
                 await myCommitCrime(ns, currentCrime);
+                headline = `Committed ${currentCrime}`;
             }
         } else {
             // Train for first crime if nothing else is appropriate
             await trainForCrime(ns, crimeLadder[0]);
+            headline = `Training toward ${crimeLadder[0]}`;
         }
+
+        // ── Publish status ───────────────────────────────────────────────────
+        saveSubsystem(ns, await buildStatus(ns, ns.getPlayer(), headline, enabled));
     }
 }
 
 /**
- * Builds a crime ladder sorted by success chance (ascending)
+ * Builds a crime ladder sorted by success chance (descending)
  * This creates a dynamic ladder from easiest to hardest crimes
  */
 async function buildCrimeLadder(ns: NS): Promise<CrimeType[]> {
@@ -89,26 +163,6 @@ async function buildCrimeLadder(ns: NS): Promise<CrimeType[]> {
 
     crimeChances.sort((a, b) => b.chance - a.chance);
     return crimeChances.map(c => c.crime);
-}
-
-/** Initial pure training phase to reach minimum stats */
-async function pureTrainingPhase(ns: NS): Promise<void> {
-    ns.print('Starting pure training phase');
-    let allStatsAboveThreshold = false;
-
-    while (!allStatsAboveThreshold) {
-        const player = ns.getPlayer();
-        const lowestStat = findLowestStat(player);
-        ns.print(`Training ${lowestStat.name} (${lowestStat.value}) to reach minimum threshold of ${MIN_STAT_THRESHOLD}`);
-
-        for (let i = 0; i < TRAINING_MULTIPLIER; i++) {
-            await trainStat(ns, lowestStat.name);
-        }
-
-        allStatsAboveThreshold = checkAllStatsAboveThreshold(ns.getPlayer());
-    }
-
-    ns.print('Pure training phase complete - all stats above threshold');
 }
 
 function checkAllStatsAboveThreshold(player: Player): boolean {
@@ -135,7 +189,17 @@ function findLowestStat(player: Player): { name: string, value: number } {
     return stats[0];
 }
 
+/**
+ * Trains the given stat via university course (hacking/charisma) or gym workout
+ * (physical stats). Both Rothman University and Powerhouse Gym are Sector-12
+ * locations (NetscriptDefinitions.d.ts LocationName enum) — travel there first
+ * if the player is elsewhere, otherwise the course/workout call silently no-ops.
+ */
 async function trainStat(ns: NS, stat: string): Promise<void> {
+    if (ns.getPlayer().city !== SECTOR_12) {
+        await executeCommand(ns, `ns.singularity.travelToCity("${SECTOR_12}")`);
+    }
+
     if (ns.getPlayer().hp.current < ns.getPlayer().hp.max) {
         await executeCommand(ns, 'ns.singularity.hospitalize()');
     }
@@ -183,8 +247,6 @@ async function myCommitCrime(ns: NS, crime: CrimeType): Promise<void> {
 
     await executeCommand(ns, `ns.singularity.commitCrime("${crime}", false)`);
     await ns.sleep(crimeStats.time);
-
-    displayStatus(ns, ns.getPlayer());
 }
 
 async function trainForCrime(ns: NS, targetCrime: CrimeType): Promise<void> {
@@ -195,9 +257,7 @@ async function trainForCrime(ns: NS, targetCrime: CrimeType): Promise<void> {
     const crimeChance = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${targetCrime}")`);
     ns.print(`Training ${statToTrain} for crime: ${targetCrime} (Current success: ${formatPercent(crimeChance)})`);
 
-    for (let i = 0; i < TRAINING_MULTIPLIER; i++) {
-        await trainStat(ns, statToTrain);
-    }
+    await trainStat(ns, statToTrain);
 }
 
 function calculateStatImportance(crimeStats: CrimeStats, player: Player): Array<{ name: string, importance: number }> {
@@ -212,31 +272,35 @@ function calculateStatImportance(crimeStats: CrimeStats, player: Player): Array<
     return importance.filter(s => s.importance > 0).sort((a, b) => b.importance - a.importance);
 }
 
-async function displayStatus(ns: NS, player: Player): Promise<void> {
-    const stats = player.skills;
+/** Builds this tick's SubsystemStatus publish (docs/design/11 §3.2) — replaces the old print-only displayStatus(). */
+async function buildStatus(ns: NS, player: Player, headline: string, enabled: boolean): Promise<SubsystemStatus> {
     const karma = ns.heart.break();
     const crimeLadder = await buildCrimeLadder(ns);
 
-    ns.print('--------------------------------------');
-    ns.print(`Money: ${shortNumber(player.money)}`);
-    ns.print(`Karma: ${shortNumber(karma)}`);
-    ns.print(`HP: ${player.hp.current}/${player.hp.max}`);
-    ns.print('--------------------------------------');
-    ns.print(`Hacking: ${stats.hacking}`);
-    ns.print(`Strength: ${stats.strength}`);
-    ns.print(`Defense: ${stats.defense}`);
-    ns.print(`Dexterity: ${stats.dexterity}`);
-    ns.print(`Agility: ${stats.agility}`);
-    ns.print(`Charisma: ${stats.charisma}`);
-    ns.print(`Intelligence: ${stats.intelligence || 0}`);
-    ns.print('--------------------------------------');
-    ns.print('CRIME LADDER (by success rate):');
+    const metrics: Record<string, number | string> = {
+        money: shortNumber(player.money),
+        karma: shortNumber(karma),
+        hp: `${player.hp.current}/${player.hp.max}`,
+        hacking: player.skills.hacking,
+        strength: player.skills.strength,
+        defense: player.skills.defense,
+        dexterity: player.skills.dexterity,
+        agility: player.skills.agility,
+        charisma: player.skills.charisma,
+    };
 
     for (const crime of crimeLadder) {
         const successRate = await executeCommand<number>(ns, `ns.singularity.getCrimeChance("${crime}")`);
-        const crimeStats = await executeCommand<CrimeStats>(ns, `ns.singularity.getCrimeStats("${crime}")`);
-        const expectedProfit = (crimeStats.money * successRate) / (crimeStats.time / 1000);
-        const indicator = successRate >= COMMIT_THRESHOLD ? '[OK]' : successRate >= TRAINING_THRESHOLD ? '[TR]' : '[  ]';
-        ns.print(`${indicator} ${crime}: ${formatPercent(successRate)} - $${shortNumber(expectedProfit)}/sec`);
+        metrics[`chance_${crime}`] = formatPercent(successRate);
     }
+
+    return {
+        id: 'crime',
+        available: true,
+        enabled,
+        running: true,
+        headline,
+        metrics,
+        ts: Date.now(),
+    };
 }
