@@ -15,9 +15,9 @@ import { TargetSelector } from './target_selector';
 import { ThreadDistributionManager } from './scheduler';
 import { FormulaHelper } from './formulas';
 import { Allocator } from './allocator';
-import { execMulti } from './exec_multi';
 import { Priority } from '../lib/config';
 import { getPressure } from '../lib/machine_status';
+import { requestRun } from '../lib/exec_guard';
 
 /** Pressure signals older than this are treated as stale/resolved, not acted on. */
 const PRESSURE_STALE_MS = 10_000;
@@ -251,7 +251,7 @@ export class BatchHackManager {
             if (bestCalc) {
                 this.activeBatches.set(target, bestCalc);
                 this.reserveRamForBatch(ramManager, bestCalc);
-                this.executeTargetBatches(target, bestCalc, ramManager);
+                await this.executeTargetBatches(target, bestCalc, ramManager);
                 newBatchesLaunched++;
                 this.totalBatchesLaunched += bestCalc.concurrency;
                 this.ns.print(`Started batching ${target} with ${bestCalc.concurrency} batches, ${formatMoney(bestCalc.dps)}/sec`);
@@ -279,7 +279,7 @@ export class BatchHackManager {
         }
     }
 
-    private executeTargetBatches(target: string, calc: BatchCalculation, ramManager: RamManager): void {
+    private async executeTargetBatches(target: string, calc: BatchCalculation, ramManager: RamManager): Promise<void> {
         const serverList = ramManager.getAvailableServers();
         if (serverList.length === 0) return;
 
@@ -301,21 +301,21 @@ export class BatchHackManager {
             const bid = this.generateBatchId();
 
             if (calc.hackServerAlloc[i]?.some(t => t > 0)) {
-                this.executeOperation(SCRIPT_PATHS.hack, calc.hackServerAlloc[i], serverList, target, calc.hackPerBatch, hackStart, hackFinish, `batch-hack-${bid}`);
+                await this.executeOperation(SCRIPT_PATHS.hack, calc.hackServerAlloc[i], serverList, target, calc.hackPerBatch, hackStart, hackFinish, `batch-hack-${bid}`);
             }
             if (calc.weaken1ServerAlloc[i]?.some(t => t > 0)) {
-                this.executeOperation(SCRIPT_PATHS.weaken1, calc.weaken1ServerAlloc[i], serverList, target, Math.ceil(calc.weaken1ThreadsRaw), weaken1Start, weaken1Finish, `batch-weaken1-${bid}`);
+                await this.executeOperation(SCRIPT_PATHS.weaken1, calc.weaken1ServerAlloc[i], serverList, target, Math.ceil(calc.weaken1ThreadsRaw), weaken1Start, weaken1Finish, `batch-weaken1-${bid}`);
             }
             if (calc.growServerAlloc[i]?.some(t => t > 0)) {
-                this.executeOperation(SCRIPT_PATHS.grow, calc.growServerAlloc[i], serverList, target, calc.growPerBatch, growStart, growFinish, `batch-grow-${bid}`);
+                await this.executeOperation(SCRIPT_PATHS.grow, calc.growServerAlloc[i], serverList, target, calc.growPerBatch, growStart, growFinish, `batch-grow-${bid}`);
             }
             if (calc.weaken2ServerAlloc[i]?.some(t => t > 0)) {
-                this.executeOperation(SCRIPT_PATHS.weaken2, calc.weaken2ServerAlloc[i], serverList, target, Math.ceil(calc.weaken2ThreadsRaw), weaken2Start, weaken2Finish, `batch-weaken2-${bid}`);
+                await this.executeOperation(SCRIPT_PATHS.weaken2, calc.weaken2ServerAlloc[i], serverList, target, Math.ceil(calc.weaken2ThreadsRaw), weaken2Start, weaken2Finish, `batch-weaken2-${bid}`);
             }
         }
     }
 
-    private executeOperation(
+    private async executeOperation(
         script: string,
         allocation: number[],
         serverList: string[],
@@ -324,12 +324,19 @@ export class BatchHackManager {
         startTime: number,
         endTime: number,
         description: string,
-    ): void {
+    ): Promise<void> {
         for (let i = 0; i < allocation.length; i++) {
             if (allocation[i] <= 0) continue;
             const server = serverList[i];
             if (!this.ns.serverExists(server)) continue;
-            execMulti(this.ns, server, allocation[i], script, target, startTime, endTime - startTime, description, false, true);
+            await requestRun(this.ns, {
+                script,
+                host: server,
+                threads: allocation[i],
+                priority: Priority.COMPUTE_WORKER,
+                args: [target, startTime, endTime - startTime, description, false, true],
+                requesterId: description,
+            });
         }
     }
 
