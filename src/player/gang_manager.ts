@@ -1,6 +1,7 @@
 import type { NS } from '@ns';
 import { saveSubsystem } from '../lib/subsystem_state';
 import { loadSettings } from '../lib/settings';
+import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 
 /**
  * Gang manager (docs/design/11) — Wave 1 implementation.
@@ -23,6 +24,18 @@ const ASCEND_MULTI_THRESHOLD  =   1.05; // ascend if any primary stat mult gain 
 const EQUIP_BUDGET_FRACTION   =  0.001; // max fraction of player cash to spend on equipment per tick
 const AUG_BUDGET_FRACTION     =  0.050; // larger budget for augmentations (permanent)
 const TRAIN_TICKS_AFTER_EVENT =      5; // ticks a freshly recruited/ascended member spends training
+
+// Territory warfare heuristic (decision-gated — see step 5 in main()):
+//   • ENGAGE (risky — can kill members) only when win chance against every active
+//     rival (territory > 0) is comfortably above a coin-flip.
+//   • DISENGAGE (safe — no gate needed) once the worst win chance slips below a
+//     lower floor. The gap between the two thresholds is a hysteresis band so we
+//     don't flip-flop every tick when a clash chance sits right at the edge.
+const WARFARE_WIN_CHANCE_MIN      =  0.65; // engage threshold — "comfortably" above 50%
+const WARFARE_DISENGAGE_THRESHOLD =  0.55; // disengage threshold — below this, bail out
+const WARFARE_DENY_IMPROVE_MARGIN =  0.05; // after a deny, require this much improvement before re-asking
+const WARFARE_DEFER_TICKS         =    12; // ticks a "defer" verdict suppresses re-asking (12 × 5s ≈ 1 min)
+const GANG_WARFARE_DECISION_ID    = 'gangWarfare'; // stable id — only ever one gang
 
 // Gang factions ordered by combat power (highest first); NiteSec/TheBlackHand are hacking gangs.
 // createGang() returns false if preconditions aren't met, so we safely try each.
@@ -63,7 +76,16 @@ const trainUntilMs: Record<string, number> = {};
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog('ALL');
 
+	// ── territory-warfare decision suppression (mirrors player_sequencer's
+	// AUG_DECISION_ID pattern: a "denied until state improves" gate plus a
+	// "deferred until tick N" cooldown) ──────────────────────────────────────
+	let warfareDeniedAtWinChance = -1; // deny → don't re-ask until worst win chance exceeds this + margin
+	let warfareDeferUntilTick    =  0; // defer → don't re-ask until this tick
+	let lastWorstWinChance       =  0; // most recent assessment, captured for use by a deny verdict
+	let tick = 0;
+
 	while (true) {
+		tick++;
 		const enabled = loadSettings(ns).autoGang;
 
 		// ── availability ───────────────────────────────────────────────────
@@ -128,11 +150,65 @@ export async function main(ns: NS): Promise<void> {
 			// 4. Assign tasks (respect/money balance, wanted kept in check)
 			assignTasks(ns, members, gangInfo, isHacking);
 
-			// 5. Territory warfare — conservative hold
-			// TODO(decision): enable territory warfare when win-chance heuristics are
-			// approved by the judgment layer (subsystem decision-routing not built yet).
-			// For now, ensure warfare is OFF to avoid accidental member deaths.
-			try { ns.gang.setTerritoryWarfare(false); } catch { /* ok */ }
+			// 5. Territory warfare — decision-gated (see WARFARE_* tuning constants
+			//    above for the heuristic rationale). Engaging is risky (a lost clash
+			//    can kill members) so it needs approval; disengaging is always safe
+			//    and is done proactively without a gate.
+
+			// Apply any verdict on a prior warfare ask.
+			for (const reply of drainReplies(ns)) {
+				if (reply.id !== GANG_WARFARE_DECISION_ID) continue;
+				removePending(ns, GANG_WARFARE_DECISION_ID);
+				if (reply.verdict === 'approve') {
+					try { ns.gang.setTerritoryWarfare(true); } catch { /* ok */ }
+					ns.print('INFO gang_manager: territory warfare APPROVED — engaged');
+				} else if (reply.verdict === 'deny') {
+					warfareDeniedAtWinChance = lastWorstWinChance;
+					ns.print(`INFO gang_manager: territory warfare DENIED — suppressed until worst win chance exceeds ${(warfareDeniedAtWinChance + WARFARE_DENY_IMPROVE_MARGIN).toFixed(2)}`);
+				} else if (reply.verdict === 'defer') {
+					warfareDeferUntilTick = tick + WARFARE_DEFER_TICKS;
+					ns.print(`INFO gang_manager: territory warfare DEFERRED — re-asking in ${WARFARE_DEFER_TICKS} ticks`);
+				}
+			}
+
+			const assessment = assessTerritoryWarfare(ns, gangInfo.faction);
+			if (assessment) {
+				lastWorstWinChance = assessment.worstWinChance;
+				const territoryFull = gangInfo.territory >= 1;
+
+				if (gangInfo.territoryWarfareEngaged) {
+					// Safe direction — no approval needed. Bail out once it's no longer
+					// worth the risk (win chance dropped) or there's nothing left to gain.
+					if (territoryFull || assessment.worstWinChance < WARFARE_DISENGAGE_THRESHOLD) {
+						try { ns.gang.setTerritoryWarfare(false); } catch { /* ok */ }
+						removePending(ns, GANG_WARFARE_DECISION_ID);
+						ns.print(territoryFull
+							? 'INFO gang_manager: territory at 100% — warfare disengaged'
+							: `INFO gang_manager: worst win chance ${assessment.worstWinChance.toFixed(2)} below floor — warfare disengaged`);
+					}
+				} else if (!territoryFull && assessment.rivalCount > 0 && assessment.worstWinChance >= WARFARE_WIN_CHANCE_MIN) {
+					const suppressed = assessment.worstWinChance <= warfareDeniedAtWinChance + WARFARE_DENY_IMPROVE_MARGIN
+						|| tick < warfareDeferUntilTick;
+					if (!suppressed) {
+						upsertPending(ns, {
+							id: GANG_WARFARE_DECISION_ID,
+							kind: 'gangWarfare',
+							prompt: `Territory warfare looks safe — worst win chance ${(assessment.worstWinChance * 100).toFixed(0)}% `
+								+ `vs ${assessment.rivalCount} active rival(s). Engage?`,
+							command: 'ns.gang.setTerritoryWarfare(true)',
+							context: {
+								worstWinChance: assessment.worstWinChance,
+								rivalCount:     assessment.rivalCount,
+								territory:      gangInfo.territory,
+							},
+							ts: Date.now(),
+						});
+					}
+				} else {
+					// No longer a good idea to engage (or nothing to contest) — drop any stale ask.
+					removePending(ns, GANG_WARFARE_DECISION_ID);
+				}
+			}
 
 			// ── publish ────────────────────────────────────────────────────
 			const info2      = ns.gang.getGangInformation();
@@ -276,6 +352,36 @@ function assignTasks(
 				ns.gang.setMemberTask(name, task);
 			}
 		} catch { /* ignore */ }
+	}
+}
+
+/**
+ * Assess whether engaging territory warfare currently looks safe.
+ *
+ * "Active rival" = any other gang (from getAllGangInformation, which — unlike the
+ * deprecated getOtherGangInformation — includes every gang, own included) that
+ * holds territory > 0, i.e. one we could actually clash with. worstWinChance is
+ * the minimum of getChanceToWinClash() across those rivals — the heuristic cares
+ * about the worst case, since any single lost clash can kill a member. Returns
+ * null (never engage) if the lookup throws, so callers just skip the tick.
+ */
+function assessTerritoryWarfare(
+	ns: NS,
+	ownFaction: string,
+): { worstWinChance: number; rivalCount: number } | null {
+	try {
+		const all = ns.gang.getAllGangInformation();
+		let worst = 1;
+		let rivalCount = 0;
+		for (const [name, info] of Object.entries(all)) {
+			if (name === ownFaction || info.territory <= 0) continue;
+			rivalCount++;
+			const chance = ns.gang.getChanceToWinClash(name);
+			if (chance < worst) worst = chance;
+		}
+		return { worstWinChance: rivalCount > 0 ? worst : 1, rivalCount };
+	} catch {
+		return null;
 	}
 }
 
