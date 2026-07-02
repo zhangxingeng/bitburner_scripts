@@ -12,7 +12,10 @@ import { PORT_DECISION_REPLY, popPort, pushPort } from './ports';
  *     because multiple responders need the same persistent view, and a port pop
  *     would let one consumer steal an item the other never sees.
  *  2. Replies — a PORT (`PORT_DECISION_REPLY`). Responders (console / MCP) push
- *     a verdict; the producer pops and applies, then clears the pending entry.
+ *     a verdict; the owning producer pops and applies, then clears the pending
+ *     entry. Multiple producers (one per subsystem manager) now share this one
+ *     port, so every drain call MUST pass a `matches` predicate scoping it to
+ *     that producer's own decision ids — see `drainReplies` below.
  *
  * Capability boundary: responders only *emit* a verdict. They never act on a
  * decision or mutate pending state — the producer owns that (§3).
@@ -93,16 +96,33 @@ export function pushReply(ns: NS, reply: DecisionReply): boolean {
 	return pushPort(ns, PORT_DECISION_REPLY, JSON.stringify(reply));
 }
 
-/** Producer side: drain all pending replies (FIFO). Malformed entries are skipped. */
-export function drainReplies(ns: NS): DecisionReply[] {
+/**
+ * Producer side: drain pending replies (FIFO) whose `id` satisfies `matches`.
+ *
+ * Six independent daemons now share this one port (gang/sleeve/bladeburner/
+ * grafting/stanek managers + player_sequencer), so a plain pop-until-empty is
+ * unsafe: whichever daemon calls this first would consume every reply on the
+ * port, including ones addressed to a different manager, and silently drop
+ * them. `matches` scopes the drain to replies this caller actually owns;
+ * anything that doesn't match is pushed back onto the port immediately so
+ * its real owner can still pick it up on their own next drain. Omitting
+ * `matches` restores the old drain-everything behavior — only safe when a
+ * single consumer owns the whole port.
+ */
+export function drainReplies(ns: NS, matches?: (id: string) => boolean): DecisionReply[] {
 	const out: DecisionReply[] = [];
+	const requeue: string[] = [];
 	let raw = popPort(ns, PORT_DECISION_REPLY);
 	while (raw !== null) {
 		try {
 			const r = JSON.parse(raw) as DecisionReply;
-			if (r && typeof r.id === 'string' && typeof r.verdict === 'string') out.push(r);
+			if (r && typeof r.id === 'string' && typeof r.verdict === 'string') {
+				if (!matches || matches(r.id)) out.push(r);
+				else requeue.push(raw);
+			}
 		} catch { /* skip malformed */ }
 		raw = popPort(ns, PORT_DECISION_REPLY);
 	}
+	for (const r of requeue) pushPort(ns, PORT_DECISION_REPLY, r);
 	return out;
 }

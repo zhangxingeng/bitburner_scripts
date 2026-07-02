@@ -156,8 +156,7 @@ export async function main(ns: NS): Promise<void> {
 			//    and is done proactively without a gate.
 
 			// Apply any verdict on a prior warfare ask.
-			for (const reply of drainReplies(ns)) {
-				if (reply.id !== GANG_WARFARE_DECISION_ID) continue;
+			for (const reply of drainReplies(ns, id => id === GANG_WARFARE_DECISION_ID)) {
 				removePending(ns, GANG_WARFARE_DECISION_ID);
 				if (reply.verdict === 'approve') {
 					try { ns.gang.setTerritoryWarfare(true); } catch { /* ok */ }

@@ -462,8 +462,7 @@ function handleBlackOps(
     choice:         { type: BBType; name: BBName; reason: string } | null;
 } {
     // ── Apply any human/MCP verdict on a pending Black Op decision. ──────────
-    for (const reply of drainReplies(ns)) {
-        if (!reply.id.startsWith('bladeOp:')) continue;
+    for (const reply of drainReplies(ns, id => id.startsWith('bladeOp:'))) {
         const opName = reply.id.slice('bladeOp:'.length);
         removePending(ns, reply.id);
         if (reply.verdict === 'approve') {

@@ -65,13 +65,12 @@ export async function main(ns: NS): Promise<void> {
         // own applying the verdict and clearing the pending entry (lib/decisions.ts).
         // The candidate aug/cost is read back from the pending entry's own context
         // (set when it was surfaced below) rather than trusting the reply payload.
-        const repliesReceived = drainReplies(ns);
+        const repliesReceived = drainReplies(ns, id => id === GRAFT_DECISION_ID);
         if (repliesReceived.length > 0) {
             const pendingNow = loadPending(ns).find(p => p.id === GRAFT_DECISION_ID);
             const ctxAug  = (pendingNow?.context?.['cheapestAug'] as string | undefined)  ?? '';
             const ctxCost = (pendingNow?.context?.['cheapestCost'] as number | undefined) ?? 0;
             for (const reply of repliesReceived) {
-                if (reply.id !== GRAFT_DECISION_ID) continue;
                 removePending(ns, GRAFT_DECISION_ID);
                 if (reply.verdict === 'approve') {
                     if (ctxAug) {

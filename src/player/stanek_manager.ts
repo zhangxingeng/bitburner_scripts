@@ -251,8 +251,7 @@ export async function main(ns: NS): Promise<void> {
 
 		// Apply any human/MCP verdicts on outstanding placement decisions.
 		const pendingBeforeReplies = loadPending(ns);
-		for (const reply of drainReplies(ns)) {
-			if (!reply.id.startsWith(STANEK_DECISION_PREFIX)) continue;
+		for (const reply of drainReplies(ns, id => id.startsWith(STANEK_DECISION_PREFIX))) {
 			const entry = pendingBeforeReplies.find(p => p.id === reply.id);
 			removePending(ns, reply.id);
 			if (!entry) continue;

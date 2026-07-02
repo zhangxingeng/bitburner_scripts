@@ -215,8 +215,7 @@ function applySleeveAugReplies(
 	deniedAugIds: Set<string>,
 	deferUntilTick: Map<string, number>,
 ): void {
-	for (const reply of drainReplies(ns)) {
-		if (!reply.id.startsWith('sleeveAug:')) continue; // not ours — leave to its owner
+	for (const reply of drainReplies(ns, id => id.startsWith('sleeveAug:'))) {
 		removePending(ns, reply.id);
 
 		const [, idxStr, ...augNameParts] = reply.id.split(':');

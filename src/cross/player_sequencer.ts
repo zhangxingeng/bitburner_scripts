@@ -210,8 +210,7 @@ export async function main(ns: NS): Promise<void> {
 		// ── Apply human/MCP verdicts on the aug/reset decision ────────────────
 		// Responders (control console, MCP agent) push to PORT_DECISION_REPLY; we
 		// own applying the verdict and clearing the pending entry (lib/decisions.ts).
-		for (const reply of drainReplies(ns)) {
-			if (reply.id !== AUG_DECISION_ID) continue;
+		for (const reply of drainReplies(ns, id => id === AUG_DECISION_ID)) {
 			removePending(ns, AUG_DECISION_ID);
 			if (reply.verdict === 'approve') {
 				// --install implies --purchase and installs (resets) on a fully-successful

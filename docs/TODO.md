@@ -25,10 +25,20 @@ into all five subsystems, built in parallel via git-worktree subagents and merge
 | `src/player/sleeve_manager.ts` | Per-(sleeve, aug) purchase decisions via `getSleevePurchasableAugs`/`purchaseSleeveAug`, independent of the existing task-assignment ladder | `sleeveSpend` |
 | `src/player/stanek_manager.ts` | Minimal MVP: brute-force first-fit scan for one non-booster fragment at a time, surfaced as a placement decision | new kind `stanekPlacement` added to `lib/decisions.ts` |
 
-**Not yet done — still needed before calling this closed:** a live in-game smoke test of each
-decision surfacing correctly in the control console / MCP and each approve/deny/defer path actually
-firing the right game call. This was built and typechecked but not run live (multiple independent
-subagents, no shared game session to verify against).
+**Live-verified 2026-07-02**, and a real bug was found and fixed in the process:
+`lib/decisions.ts::drainReplies()` did a destructive pop-until-empty of the single shared
+`PORT_DECISION_REPLY` port. That was fine when `player_sequencer` (the `augReset` decision) was
+its only caller, but once all five subsystem managers above started calling it too, whichever
+daemon polled the port first would consume — and silently discard — replies addressed to a
+different manager. Caught live: an approved Stanek fragment placement vanished (port drained,
+pending entry never cleared, fragment never placed) because another manager's `drainReplies()`
+call won the race that tick.
+
+Fix: `drainReplies(ns, matches)` now takes a predicate; each of the 6 call sites (five managers
+above + `player_sequencer.ts`) scopes it to their own decision-id namespace, and non-matching
+replies are pushed back onto the port instead of being dropped. Re-verified live: the exact
+previously-lost Stanek approval was replayed and correctly applied with all 5 managers running
+concurrently.
 
 ## 2. Wave 2 leftovers from the priority/exec_guard refactor — DONE (2026-07-01)
 
