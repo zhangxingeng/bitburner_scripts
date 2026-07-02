@@ -2,6 +2,7 @@ import type { NS } from '@ns';
 import { saveSubsystem } from '../lib/subsystem_state';
 import type { SubsystemStatus } from '../lib/subsystem_state';
 import { loadSettings } from '../lib/settings';
+import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 
 /**
  * Sleeve manager (docs/design/11) — persistent daemon.
@@ -17,8 +18,12 @@ import { loadSettings } from '../lib/settings';
  *   4. shock > 0                     → finish shock recovery before crime
  *   5. default                       → commit Homicide (karma/money grind)
  *
+ * Sleeve augmentation purchases (irreversible money spend) are handled as a
+ * PARALLEL concern via the shared approve/deny/defer decision queue
+ * (lib/decisions.ts, kind 'sleeveSpend') — see checkSleeveAugPurchase() below.
+ * They are not part of the task priority ladder above and never override it.
+ *
  * NOT automated (flagged TODO(decision)):
- *   - Sleeve augmentation purchases
  *   - Sleeve memory upgrades (no API — must be done at The Covenant UI)
  *   - Following player faction/company work (requires ns.singularity — too costly here)
  *   - Bladeburner sleeve actions
@@ -32,7 +37,11 @@ import { loadSettings } from '../lib/settings';
  *   - ns.sleeve.setToCommitCrime(i, crimeType: CrimeType) → boolean
  *   - ns.sleeve.travel(i, city: CityName) → boolean
  *   - ns.sleeve.getTask(i) → task object | null
+ *   - ns.sleeve.getSleevePurchasableAugs(i) → {name, cost}[] (augs affordable-shape, NOT owned augs)
+ *   - ns.sleeve.purchaseSleeveAug(i, augName) → boolean (real money spend, permanent)
  *   NOTE: getSleeveStats / getInformation were REMOVED in 2.2.0; use getSleeve instead.
+ *   NOTE: neither aug call is Singularity-gated (both live under ns.sleeve), so no
+ *   ns_dodge/SF4 wrapping is needed here.
  */
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -61,6 +70,17 @@ const GYM_TARGETS: Record<string, number> = {
 	dex: 50,
 	agi: 50,
 };
+
+/**
+ * How often (in main-loop ticks, TICK_MS apart) to re-check purchasable sleeve
+ * augs. getSleevePurchasableAugs() doesn't change second-to-second — gating it
+ * behind a slower cadence avoids needless API-call churn every 5s tick.
+ * 6 ticks × 5s ≈ 30s.
+ */
+const AUG_CHECK_INTERVAL_TICKS = 6;
+
+/** How long a "Defer" verdict suppresses a given sleeve-aug decision (12 × 5s ≈ 1 min). */
+const AUG_DECISION_DEFER_TICKS = 12;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -135,12 +155,109 @@ function assignSleeveTask(ns: NS, idx: number): string {
 	return `crime:Homicide`;
 }
 
+/**
+ * Check whether sleeve `idx` has an affordable augmentation purchase available
+ * and, if so, surface it as a pending decision (approve/deny/defer). This is a
+ * PARALLEL concern to assignSleeveTask above — augmentation purchases are an
+ * irreversible spend, not a "task" a sleeve performs, and never affect the
+ * priority ladder. Called only every AUG_CHECK_INTERVAL_TICKS ticks by main().
+ *
+ * Decision id: `sleeveAug:${idx}:${augName}` — stable per (sleeve, aug) pair,
+ * so multiple sleeves (or multiple candidate augs over time for one sleeve)
+ * each get their own independent pending entry.
+ */
+function checkSleeveAugPurchase(
+	ns: NS,
+	idx: number,
+	tick: number,
+	deniedAugIds: Set<string>,
+	deferUntilTick: Map<string, number>,
+): void {
+	let augs: ReturnType<typeof ns.sleeve.getSleevePurchasableAugs>;
+	try {
+		augs = ns.sleeve.getSleevePurchasableAugs(idx);
+	} catch {
+		return; // API unavailable this tick — next scheduled check will retry.
+	}
+	if (augs.length === 0) return;
+
+	const cheapest = augs.reduce((a, b) => (b.cost < a.cost ? b : a));
+	const id = `sleeveAug:${idx}:${cheapest.name}`;
+
+	// Deny → suppressed indefinitely for this exact pair. Defer → suppressed
+	// until the cooldown tick passes.
+	if (deniedAugIds.has(id)) return;
+	if (tick < (deferUntilTick.get(id) ?? 0)) return;
+
+	if (ns.getPlayer().money < cheapest.cost) return; // not affordable yet — don't surface prematurely
+
+	const added = upsertPending(ns, {
+		id,
+		kind: 'sleeveSpend',
+		prompt: `Sleeve ${idx}: buy augmentation "${cheapest.name}" for $${cheapest.cost.toLocaleString()}?`,
+		command: `sleeve.purchaseSleeveAug(${idx}, "${cheapest.name}")`,
+		context: { sleeveIdx: idx, augName: cheapest.name, cost: cheapest.cost },
+		ts: Date.now(),
+	});
+	if (added) {
+		ns.print(`DECISION sleeve ${idx} aug purchase surfaced: ${cheapest.name} ($${cheapest.cost.toLocaleString()})`);
+	}
+}
+
+/**
+ * Apply verdicts on pending sleeve-aug decisions. Drained every main-loop tick
+ * (independent of AUG_CHECK_INTERVAL_TICKS) so a verdict is acted on promptly.
+ * Mirrors the drain/apply pattern proven in cross/player_sequencer.ts.
+ */
+function applySleeveAugReplies(
+	ns: NS,
+	tick: number,
+	deniedAugIds: Set<string>,
+	deferUntilTick: Map<string, number>,
+): void {
+	for (const reply of drainReplies(ns)) {
+		if (!reply.id.startsWith('sleeveAug:')) continue; // not ours — leave to its owner
+		removePending(ns, reply.id);
+
+		const [, idxStr, ...augNameParts] = reply.id.split(':');
+		const idx = Number(idxStr);
+		const augName = augNameParts.join(':');
+
+		if (reply.verdict === 'approve') {
+			let ok = false;
+			try {
+				ok = ns.sleeve.purchaseSleeveAug(idx, augName);
+			} catch (e) {
+				ns.print(`WARN: purchaseSleeveAug(${idx}, ${augName}) threw: ${String(e)}`);
+			}
+			ns.print(ok
+				? `DECISION approved — sleeve ${idx} bought "${augName}"`
+				: `WARN: sleeve ${idx} purchase of "${augName}" returned false (money/state may have changed)`);
+		} else if (reply.verdict === 'deny') {
+			deniedAugIds.add(reply.id);
+			ns.print(`DECISION denied — sleeve ${idx} aug "${augName}" suppressed`);
+		} else if (reply.verdict === 'defer') {
+			deferUntilTick.set(reply.id, tick + AUG_DECISION_DEFER_TICKS);
+			ns.print(`DECISION deferred — sleeve ${idx} aug "${augName}" re-surfacing in ${AUG_DECISION_DEFER_TICKS} ticks`);
+		}
+	}
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export async function main(ns: NS): Promise<void> {
 	ns.disableLog('ALL');
 
+	// ── Sleeve-aug decision suppression state (Step D — DecisionsPanel) ───────
+	// Keyed by decision id (`sleeveAug:${idx}:${augName}`); persists in-memory
+	// for the life of this daemon, mirroring cross/player_sequencer.ts's pattern.
+	const deniedAugIds   = new Set<string>();
+	const deferUntilTick = new Map<string, number>();
+	let   tick = 0;
+
 	while (true) {
+		tick++;
+
 		const settings  = loadSettings(ns);
 		const enabled   = settings.autoSleeve;
 		const numSleeves = tryGetNumSleeves(ns);
@@ -162,6 +279,11 @@ export async function main(ns: NS): Promise<void> {
 			continue;
 		}
 
+		// ── Apply human/MCP verdicts on any pending sleeve-aug decisions ──────
+		// Drained every tick regardless of the slower surfacing cadence below,
+		// so a verdict is acted on promptly once given.
+		applySleeveAugReplies(ns, tick, deniedAugIds, deferUntilTick);
+
 		// ── Sleeve management loop ────────────────────────────────────────────
 
 		const tasks: string[] = [];
@@ -171,6 +293,13 @@ export async function main(ns: NS): Promise<void> {
 		for (let i = 0; i < numSleeves; i++) {
 			const task = assignSleeveTask(ns, i);
 			tasks.push(`s${i}:${task}`);
+
+			// Augmentation-purchase decision surfacing — parallel concern, does not
+			// affect `task` above. Cheap-but-not-free API call, so gated to a slower
+			// cadence than the main 5s tick.
+			if (tick % AUG_CHECK_INTERVAL_TICKS === 0) {
+				checkSleeveAugPurchase(ns, i, tick, deniedAugIds, deferUntilTick);
+			}
 
 			// Accumulate metrics (tolerates getSleeve failures — task already handled them).
 			try {
