@@ -24,7 +24,7 @@ import { RamManager } from './ram_manager';
 import { TargetSelector, isServerPrepared, getTargetServers } from './target_selector';
 import { BatchHackManager } from './hwgw_batcher';
 import { ThreadDistributionManager } from './scheduler';
-import { execMulti } from './exec_multi';
+import { requestRun } from '../lib/exec_guard';
 
 // NOTE: daemon lifecycle (spreader, hacknetManager, phaseDetector, bootAgent,
 // pservManager, gameAgent, stockEngine, and this coordinator itself) is owned
@@ -141,7 +141,15 @@ async function prepareServers(
             const freeRam = Math.max(0, ns.getServerMaxRam(host) - ns.getServerUsedRam(host) - reserve);
             const autoGrowRam = ns.getScriptRam(SCRIPT_PATHS.autoGrow);
             const threads = Math.floor(freeRam / autoGrowRam / 2);
-            if (threads > 0) execMulti(ns, host, threads, SCRIPT_PATHS.autoGrow, target);
+            if (threads > 0) {
+                await requestRun(ns, {
+                    script: SCRIPT_PATHS.autoGrow,
+                    host,
+                    threads,
+                    priority: Priority.COMPUTE_WORKER,
+                    args: [target],
+                });
+            }
         }
         serverIndex = (serverIndex + 1) % availableServers.length;
     }
@@ -166,12 +174,12 @@ async function prepareServers(
 }
 
 /** Fill idle botnet RAM with share() threads to boost faction rep. */
-function shareRemainingRam(
+async function shareRemainingRam(
     ns: NS,
     availableServers: string[],
     homeReserve: number,
     maxHomeFraction: number,
-): void {
+): Promise<void> {
     const scriptRam = ns.getScriptRam(SCRIPT_PATHS.share);
     let totalThreads = 0;
 
@@ -183,7 +191,7 @@ function shareRemainingRam(
         const ramToUse = host === 'home' ? free * maxHomeFraction : free;
         const threads = Math.floor(ramToUse / scriptRam);
         if (threads > 0) {
-            execMulti(ns, host, threads, SCRIPT_PATHS.share);
+            await requestRun(ns, { script: SCRIPT_PATHS.share, host, threads, priority: Priority.COMPUTE_WORKER });
             totalThreads += threads;
         }
     }
@@ -295,7 +303,7 @@ export async function main(ns: NS): Promise<void> {
 
             // ── Share idle RAM ────────────────────────────────────────────────
             if (FEATURES.enableShare && sec - lastShareTime >= INTERVAL_SHARE_S) {
-                shareRemainingRam(ns, availServers, homeReserved, HOME_RAM_RESERVE_FRACTION);
+                await shareRemainingRam(ns, availServers, homeReserved, HOME_RAM_RESERVE_FRACTION);
                 lastShareTime = sec;
             }
 

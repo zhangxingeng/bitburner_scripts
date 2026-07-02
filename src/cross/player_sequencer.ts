@@ -1,6 +1,6 @@
 import type { NS } from '@ns';
 import { PORT_PHASE, PORT_AUGS, peekPort } from '../lib/ports';
-import { DesignPhase, PHASE_RESET_MIN_AUGS, SCRIPT_PATHS } from '../lib/config';
+import { DesignPhase, PHASE_RESET_MIN_AUGS, SCRIPT_PATHS, Priority } from '../lib/config';
 import { loadSettings } from '../lib/settings';
 import { notify } from '../cross/notification';
 import { executeCommand } from '../lib/ns_dodge';
@@ -8,6 +8,7 @@ import { hasSF4 } from '../lib/sf_check';
 import { savePlayerState } from '../lib/player_state';
 import { upsertPending, removePending, drainReplies } from '../lib/decisions';
 import { PLAYER_MANAGERS } from '../lib/manager_registry';
+import { requestRun } from '../lib/exec_guard';
 
 /**
  * Player Sequencer — autonomous Thread-P brain daemon.
@@ -113,7 +114,7 @@ async function publishPlayerState(ns: NS): Promise<void> {
  * This is the ONLY place new subsystem managers are launched; adding one is a
  * registry row + a script, never an edit here (keeps parallel builds disjoint).
  */
-function tickManagers(ns: NS, settings: ReturnType<typeof loadSettings>): void {
+async function tickManagers(ns: NS, settings: ReturnType<typeof loadSettings>): Promise<void> {
 	for (const spec of PLAYER_MANAGERS) {
 		const enabled = settings[spec.settingKey] === true;
 		const st = managerState.get(spec.id) ?? { knownAlive: false, failCount: 0 };
@@ -133,7 +134,8 @@ function tickManagers(ns: NS, settings: ReturnType<typeof loadSettings>): void {
 					}
 				}
 				if (st.failCount < 2) {
-					const pid = ns.run(spec.path, 1);
+					const result = await requestRun(ns, { script: spec.path, threads: 1, priority: Priority.ESSENTIAL, requesterId: spec.id });
+					const pid = result.ok ? result.pid : 0;
 					if (pid > 0) {
 						ns.print(`${spec.label} manager launched (pid ${pid})`);
 						st.knownAlive = true;
@@ -203,7 +205,7 @@ export async function main(ns: NS): Promise<void> {
 		// Subsystem managers (design/11) — toggle-gated, SF-independent (each self-
 		// guards on its own SF/BitNode). Walked every tick, before the SF4 gate and
 		// the reset/continue branches, so they're maintained in all loop states.
-		tickManagers(ns, settings);
+		await tickManagers(ns, settings);
 
 		// ── Apply human/MCP verdicts on the aug/reset decision ────────────────
 		// Responders (control console, MCP agent) push to PORT_DECISION_REPLY; we
@@ -215,7 +217,8 @@ export async function main(ns: NS): Promise<void> {
 				// --install implies --purchase and installs (resets) on a fully-successful
 				// buy — matches what the decision prompt actually asked ("buy and reset?").
 				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
-					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--install');
+					const result = await requestRun(ns, { script: SCRIPT_PATHS.augPlanner, threads: 1, priority: Priority.ESSENTIAL, args: ['--install'] });
+					const pid = result.ok ? result.pid : 0;
 					ns.print(pid > 0
 						? `DECISION approved — aug_planner --install launched (pid ${pid})`
 						: 'WARN: aug_planner --install failed to start on approval');
@@ -244,7 +247,8 @@ export async function main(ns: NS): Promise<void> {
 				// Clear any decision surfaced before the switches were flipped to auto.
 				removePending(ns, AUG_DECISION_ID);
 				if (!ns.isRunning(SCRIPT_PATHS.augPlanner, 'home')) {
-					const pid = ns.run(SCRIPT_PATHS.augPlanner, 1, '--install');
+					const result = await requestRun(ns, { script: SCRIPT_PATHS.augPlanner, threads: 1, priority: Priority.ESSENTIAL, args: ['--install'] });
+					const pid = result.ok ? result.pid : 0;
 					ns.print(pid > 0
 						? `AUTO: aug_planner --install launched (${pendingAugs} augs pending, pid ${pid})`
 						: 'WARN: aug_planner --install failed to start');
@@ -338,7 +342,8 @@ export async function main(ns: NS): Promise<void> {
 				}
 				// Relaunch if under the notify threshold (first launch OR first retry)
 				if (fmFailCount < 2) {
-					const pid = ns.run(SCRIPT_PATHS.factionManager, 1);
+					const result = await requestRun(ns, { script: SCRIPT_PATHS.factionManager, threads: 1, priority: Priority.ESSENTIAL });
+					const pid = result.ok ? result.pid : 0;
 					if (pid > 0) {
 						ns.print(`faction_manager launched (pid ${pid})`);
 						fmKnownAlive = true;
@@ -388,7 +393,8 @@ export async function main(ns: NS): Promise<void> {
 				} else {
 					// Not running and no pending verification — launch
 					paLastOpenerCount = openerCount;
-					const pid = ns.run(SCRIPT_PATHS.programAcquirer, 1);
+					const result = await requestRun(ns, { script: SCRIPT_PATHS.programAcquirer, threads: 1, priority: Priority.ESSENTIAL });
+					const pid = result.ok ? result.pid : 0;
 					if (pid > 0) {
 						ns.print(`program_acquirer launched (pid ${pid}, have ${openerCount}/${PORT_OPENER_FILES.length} openers)`);
 					} else {
