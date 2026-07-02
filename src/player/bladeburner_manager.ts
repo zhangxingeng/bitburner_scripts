@@ -1,6 +1,8 @@
 import type { NS } from '@ns';
 import { saveSubsystem } from '../lib/subsystem_state';
 import { loadSettings } from '../lib/settings';
+import { upsertPending, removePending, drainReplies } from '../lib/decisions';
+import { notify } from '../cross/notification';
 
 /**
  * Bladeburner manager daemon (docs/design/11).
@@ -24,8 +26,10 @@ import { loadSettings } from '../lib/settings';
  *       5. Training       (when success chances are below threshold; capped)
  *       6. Field Analysis (safe default — earns rank + improves pop estimate)
  *
- * NOT automated (irreversible / high-risk):
- *   - Black Ops  — TODO(decision): surface to player via lib/decisions.ts instead.
+ * Judgment call (irreversible / high-risk — routed through lib/decisions.ts):
+ *   - Black Ops  — surfaced as a 'bladeOp' PendingDecision once rank + success
+ *     chance clear the bar; startAction() only fires on an 'approve' verdict.
+ *     See handleBlackOps() below for the approve/deny/defer wiring.
  *
  * Reference: example_code_dump/alainbryden-bitburner-scripts/bladeburner.js
  */
@@ -59,6 +63,17 @@ const CHAOS_THRESHOLD    = 50;    // chaos level that triggers anti-chaos mode
 const TRAINING_LIMIT     = 50;    // cap on Training dispatches (earns no rank)
 const LOOP_SLEEP_MS      = 2_000; // main loop cadence (actions complete in seconds)
 
+// Black Op decision suppression (a failed Black Op can permanently cost rank/
+// reputation, so re-prompting every 2 s the moment a verdict lands would be
+// spammy and, for "deny", would ignore the player's answer entirely):
+//   - "deny"  is a considered veto on THIS op — don't re-ask until rank has
+//     grown enough that the situation materially changed (success chance and
+//     team-casualty risk both scale with rank).
+//   - "defer" is "ask me again later" — a plain tick cooldown, long enough
+//     (~5 min at LOOP_SLEEP_MS) to not spam but short enough to revisit soon.
+const BLACKOP_DEFER_TICKS     = 150;  // 150 × 2 s ≈ 5 min
+const BLACKOP_DENY_RANK_DELTA = 100;  // re-offer a denied op once rank + 100
+
 // Skill priority weights: higher number = lower priority = bought later.
 const SKILL_COST_ADJ: Partial<Record<string, number>> = {
     'Overclock':         0.8,  // speeds up all actions — high value early
@@ -79,8 +94,16 @@ export async function main(ns: NS): Promise<void> {
     let lowStaminaTriggered = false;
     let timesTrained        = 0;    // accumulated Training dispatches
     let currentTaskEndTime  = 0;    // epoch ms; don't interrupt before this
+    let tick                = 0;    // loop counter, for defer-cooldown bookkeeping
+
+    // ── Black Op decision state (persists across ticks; see handleBlackOps). ────
+    let blackOpActive: BBName | null = null; // approved op currently running
+    let blackOpDeniedName: BBName | null = null;
+    let blackOpDeniedAtRank   = 0;
+    let blackOpDeferUntilTick = 0;
 
     while (true) {
+        tick++;
         const settings = loadSettings(ns);
         const enabled  = settings.autoBladeburner;
 
@@ -156,8 +179,22 @@ export async function main(ns: NS): Promise<void> {
                 staminaPct < STAMINA_LOW ||
                 (lowStaminaTriggered && staminaPct < STAMINA_HIGH);
 
+            // Black Ops — irreversible; gated behind the approve/deny/defer decision
+            // queue (lib/decisions.ts). Evaluated BEFORE chooseAction() so an approved
+            // op preempts the routine priority list, and — once started — keeps being
+            // reselected every tick (via the same needSwitch check below) so chooseAction()
+            // can't preempt it mid-flight.
+            const blackOp = handleBlackOps(
+                ns, rank, tick,
+                blackOpActive, blackOpDeniedName, blackOpDeniedAtRank, blackOpDeferUntilTick,
+            );
+            blackOpActive        = blackOp.active;
+            blackOpDeniedName    = blackOp.deniedName;
+            blackOpDeniedAtRank  = blackOp.deniedAtRank;
+            blackOpDeferUntilTick = blackOp.deferUntilTick;
+
             // Determine best action.
-            const choice = chooseAction(ns, lowStaminaTriggered, chaos, staminaPct, timesTrained);
+            const choice = blackOp.choice ?? chooseAction(ns, lowStaminaTriggered, chaos, staminaPct, timesTrained);
 
             if (choice) {
                 if (choice.name === 'Training') {
@@ -271,7 +308,10 @@ function chooseBestCity(
  *   5. Training           — when success is still below threshold; capped at TRAINING_LIMIT
  *   6. Field Analysis     — safe default
  *
- * Black Ops are intentionally excluded — TODO(decision): surface via lib/decisions.ts.
+ * Black Ops are intentionally excluded from this priority list — they're a separate,
+ * higher-priority judgment call handled by handleBlackOps() in the main loop, gated
+ * behind an explicit 'approve' verdict (lib/decisions.ts). This function is never
+ * consulted while an approved Black Op is running or being decided.
  */
 function chooseAction(
     ns:           NS,
@@ -358,14 +398,128 @@ function chooseAction(
         };
     }
 
-    // TODO(decision): Black Ops — irreversible; do NOT auto-execute.
-    // When ready, surface via lib/decisions.ts so the player can approve.
-    // Example stub (do not uncomment without a decision gate):
-    //   const next = ns.bladeburner.getNextBlackOp();
-    //   if (next && ns.bladeburner.getRank() >= next.rank) {
-    //       // DECISION REQUIRED — notify player instead of auto-running.
-    //   }
-
     // 6. Default: Field Analysis (earns small rank, improves population estimate).
     return { type: 'General', name: 'Field Analysis', reason: 'nothing better to do' };
+}
+
+/**
+ * Pure query: is the next Black Op eligible to be offered as a decision?
+ * Requires rank ≥ requirement AND estimated (min) success chance ≥ SUCCESS_THRESHOLD
+ * — same success-chance idiom used for Operations/Contracts above, since a failed
+ * Black Op is a real, sometimes-permanent setback (rank/reputation loss).
+ */
+function evaluateBlackOp(
+    ns:   NS,
+    rank: number,
+): { name: BBName; reqRank: number; chance: number } | null {
+    try {
+        const next = ns.bladeburner.getNextBlackOp();
+        if (!next || rank < next.rank) return null;
+        if (ns.bladeburner.getActionCountRemaining('Black Operations', next.name) < 1) return null;
+        const [minChance] = ns.bladeburner.getActionEstimatedSuccessChance('Black Operations', next.name);
+        if (minChance < SUCCESS_THRESHOLD) return null;
+        return { name: next.name, reqRank: next.rank, chance: minChance };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Drive the Black Op decision state machine for one tick — the irreversible
+ * counterpart to chooseAction(). Black Ops are one-shot (each is done at most
+ * once ever) and a failure can permanently cost rank/reputation, so they are
+ * NEVER started without an explicit 'approve' verdict via lib/decisions.ts:
+ *
+ *   1. Drain any reply for the current pending Black Op decision and update
+ *      the active/denied/deferred state accordingly.
+ *   2. If an approved op is still bladeburner's current action, keep selecting
+ *      it as `choice` so chooseAction() can't preempt it mid-run (it never even
+ *      runs while `choice` is non-null — see the call site in main()).
+ *   3. Otherwise, once it resolves (success or failure — either way bladeburner
+ *      moves off it), require a fresh approval before trying again; a failure
+ *      already spent the one-shot risk this tick was gating.
+ *   4. If nothing is active, evaluate the next Black Op and — unless a prior
+ *      'deny' or 'defer' is still suppressing it — upsert a pending decision.
+ *
+ * Suppression reasoning: 'deny' is a considered veto on *this* op, so it stays
+ * suppressed until rank has grown enough (BLACKOP_DENY_RANK_DELTA) that the
+ * situation has materially changed; 'defer' is just "ask again later", so it's
+ * a plain tick cooldown (BLACKOP_DEFER_TICKS).
+ */
+function handleBlackOps(
+    ns:             NS,
+    rank:           number,
+    tick:           number,
+    active:         BBName | null,
+    deniedName:     BBName | null,
+    deniedAtRank:   number,
+    deferUntilTick: number,
+): {
+    active:         BBName | null;
+    deniedName:     BBName | null;
+    deniedAtRank:   number;
+    deferUntilTick: number;
+    choice:         { type: BBType; name: BBName; reason: string } | null;
+} {
+    // ── Apply any human/MCP verdict on a pending Black Op decision. ──────────
+    for (const reply of drainReplies(ns)) {
+        if (!reply.id.startsWith('bladeOp:')) continue;
+        const opName = reply.id.slice('bladeOp:'.length);
+        removePending(ns, reply.id);
+        if (reply.verdict === 'approve') {
+            active = opName;
+            ns.print(`INFO bladeburner: Black Op "${opName}" approved — starting.`);
+        } else if (reply.verdict === 'deny') {
+            deniedName   = opName;
+            deniedAtRank = rank;
+            ns.print(`INFO bladeburner: Black Op "${opName}" denied — suppressed until rank ≥ ${(rank + BLACKOP_DENY_RANK_DELTA).toFixed(0)}.`);
+        } else if (reply.verdict === 'defer') {
+            deferUntilTick = tick + BLACKOP_DEFER_TICKS;
+            ns.print(`INFO bladeburner: Black Op "${opName}" deferred (~${((BLACKOP_DEFER_TICKS * LOOP_SLEEP_MS) / 60_000).toFixed(0)} min).`);
+        }
+    }
+
+    // ── An approved op is running — keep selecting it until it resolves. ────
+    if (active) {
+        try {
+            const current = ns.bladeburner.getCurrentAction();
+            if (current && current.name === active) {
+                return {
+                    active, deniedName, deniedAtRank, deferUntilTick,
+                    choice: { type: 'Black Operations', name: active, reason: 'approved Black Op in progress' },
+                };
+            }
+        } catch { /* fall through — treat as resolved */ }
+        ns.print(`INFO bladeburner: Black Op "${active}" resolved.`);
+        active = null;
+    }
+
+    // ── Evaluate whether to surface a fresh decision. ────────────────────────
+    const next = evaluateBlackOp(ns, rank);
+    if (!next) return { active, deniedName, deniedAtRank, deferUntilTick, choice: null };
+
+    const suppressedByDeny  = next.name === deniedName && rank < deniedAtRank + BLACKOP_DENY_RANK_DELTA;
+    const suppressedByDefer = tick < deferUntilTick;
+    if (suppressedByDeny || suppressedByDefer) {
+        return { active, deniedName, deniedAtRank, deferUntilTick, choice: null };
+    }
+
+    const id    = `bladeOp:${next.name}`;
+    const added = upsertPending(ns, {
+        id, kind: 'bladeOp',
+        prompt: `Black Op "${next.name}" available (rank ${rank.toFixed(0)}/${next.reqRank}, ` +
+                `${(next.chance * 100).toFixed(0)}% est. success) — attempt it?`,
+        context: { name: next.name, reqRank: next.reqRank, currentRank: rank, chance: next.chance },
+        ts: Date.now(),
+    });
+    if (added) {
+        notify(
+            ns,
+            `Black Op "${next.name}" available — ${(next.chance * 100).toFixed(0)}% estimated success. Attempt it?`,
+            'Approve to start now; a failed Black Op can permanently cost rank/reputation.',
+            { name: next.name, reqRank: next.reqRank, currentRank: rank, chance: next.chance },
+        );
+    }
+
+    return { active, deniedName, deniedAtRank, deferUntilTick, choice: null };
 }
