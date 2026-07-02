@@ -1,7 +1,7 @@
 # Plan: Real-Time MCP↔Game Control Channel (WebSocket bridge + RFA fallback)
 
 > **Status:** ✅ **COMPLETE — Phases 0–4 built and in-game validated 2026-06-29. Problems 1 & 2 RESOLVED.**
-> Day-to-day usage lives in **`docs/mcp-control-channel-usage.md`** (read that to *use* the channel; read
+> Day-to-day usage lives in **`mcp-control-channel-usage.md`** (read that to *use* the channel; read
 > this to understand *how it was built* and *why*).
 > **Owner workflow:** Opus plans (this doc) → Sonnet agents build each phase → Opus audits + in-game validates.
 > **Supersedes:** the "fix order" in `plan-mcp-reliability.md` (that doc is now the *problem analysis*; this is the *build plan*).

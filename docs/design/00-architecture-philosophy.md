@@ -120,7 +120,7 @@ Draft — to be confirmed/refined by research.
 
 **Cross-cutting:**
 - phase detector — classify game stage, switch strategy
-- monitor / dashboard — see [ui_plan.md](../../ui_plan.md)
+- monitor / dashboard — built as the in-game control console, see [08-control-console.md](08-control-console.md) (original scratch notes: [ui_plan.md](../archive/ui_plan.md))
 - notification bus — surface "human needed" actions
 
 ---

@@ -1,8 +1,8 @@
 # MCP ↔ Game Control Channel — Usage Guide
 
 > **Audience:** any agent (or human) driving the running Bitburner game from outside it.
-> **Status:** live and validated 2026-06-29. Built per `docs/plan-mcp-realtime-control.md`; problem
-> history in `docs/plan-mcp-reliability.md`. This doc is the *how to use it* reference.
+> **Status:** live and validated 2026-06-29. Built per `plan-mcp-realtime-control.md`; problem
+> history in `plan-mcp-reliability.md`. This doc is the *how to use it* reference.
 
 ---
 

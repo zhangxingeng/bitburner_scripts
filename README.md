@@ -10,9 +10,11 @@ synced into the running game via a custom bridge.
   internals). Read this first; everything else builds on it.
 - **`docs/design/14-roadmap-to-full-autoplay.md`** — the current state and the actionable gap list.
   Start here for "what works, what doesn't, what's next."
-- **`docs/mcp-control-channel-usage.md`** — how an AI coding agent (or a human) drives the running
+- **`docs/mcp/mcp-control-channel-usage.md`** — how an AI coding agent (or a human) drives the running
   game from outside it for development/debugging. **This tooling is dev/debug-only** — it is never
   a runtime dependency of actually playing the game.
+- **`docs/TODO.md`** — every known outstanding task (unwired decisions, roadmap gaps, tech debt),
+  gathered in one place.
 
 ## Playing the game
 
@@ -23,7 +25,7 @@ before SF4 is available. See `docs/design/14` §1a for how this is put together.
 
 Note: `run /brain.js` and MCP dev-tooling access (`run /cross/game_agent.js`) are two independent
 entry points with two independent prerequisites — neither needs the other running. See
-`docs/mcp-control-channel-usage.md` §3.
+`docs/mcp/mcp-control-channel-usage.md` §3.
 
 ## Development setup
 
@@ -36,7 +38,7 @@ pnpm run watch          # tsc -w + dist→game sync + the dev bridge, all at onc
 
 `pnpm run bridge` runs just the bridge (`build/game-bridge.ts`) standalone — the process that
 exposes the RFA/control-channel/admin WebSocket servers the MCP tools and `cross/game_agent.ts`
-talk over. See `docs/mcp-control-channel-usage.md` for the full protocol.
+talk over. See `docs/mcp/mcp-control-channel-usage.md` for the full protocol.
 
 ## Repository layout
 
@@ -49,6 +51,10 @@ talk over. See `docs/mcp-control-channel-usage.md` for the full protocol.
 - `src/ui/` — the in-game control console (React, built via `lib/react.ts`'s stealth-DOM shim).
 - `docs/design/` — the numbered design-doc spine (00 is the philosophy; read in order for history,
   or jump to 14 for current state).
+- `docs/mcp/` — the MCP control-channel usage guide + its build/problem-analysis history.
+- `docs/protocols/` — generic cross-project process docs (coding principles, doc-writing protocols).
+- `docs/reference/` — API/game-mechanics reference material and the source-repo research reports.
+- `docs/archive/` — superseded handoff/plan docs, kept for history, not living state.
 
 ## License
 

@@ -6,7 +6,7 @@ import { loadPending, pushReply, type PendingDecision, type Verdict } from '../l
 /**
  * Game Agent — real-time control channel + file↔port relay daemon on home.
  *
- * DUAL ROLE (see docs/plan-mcp-realtime-control.md §1 for architecture):
+ * DUAL ROLE (see docs/mcp/plan-mcp-realtime-control.md §1 for architecture):
  *   CONTROL CHANNEL: Opens an outbound WebSocket to the bridge (:12527) for
  *     sub-10ms bidirectional control.  Bridge forwards MCP control.cmd frames
  *     as {t:'cmd'} over this socket; agent responds {t:'res'}; agent pushes

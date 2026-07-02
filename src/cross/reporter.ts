@@ -13,10 +13,12 @@ import { PORT_HEARTBEAT, PORT_DECISION, peekPort, popPort } from '../lib/ports';
  * RAM: ~3.5 GB (write + getPlayer + scan + RAM + ps + ports)
  *       Temp script — RAM freed after exit.
  *
- * TODO(design): Replace file-dump snapshots with the React dashboard described in
- *               ui_plan.md — inject into #overview-extra-hook-0 with live data via
- *               React DOM injection (alainbryden DOM patterns).  The status/ file
- *               approach is the placeholder; the dashboard is a later pass.
+ * TODO(design): Replace file-dump snapshots with a React dashboard — inject into
+ *               #overview-extra-hook-0 with live data via React DOM injection
+ *               (alainbryden DOM patterns; see docs/design/08-control-console.md for
+ *               the existing control-console pattern to extend, docs/archive/ui_plan.md
+ *               for the original scratch notes). The status/ file approach is the
+ *               placeholder; the dashboard is a later pass.
  *
  * Launch: ns.run('/cross/reporter.js', 1)
  */

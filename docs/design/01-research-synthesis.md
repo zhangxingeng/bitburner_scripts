@@ -1,8 +1,8 @@
 # Research Synthesis — What the Four Reference Repos Teach Us
 
-> Cross-repo synthesis of `research_report/*.md`. Source repos: **Jrpl** (minimal early-game),
+> Cross-repo synthesis of `docs/reference/research_report/*.md`. Source repos: **Jrpl** (minimal early-game),
 > **Zharay** (mid-scale botnet + side-engines), **inigo** (modern TypeScript architecture),
-> **alainbryden** (full end-game autopilot). Per-repo detail lives in `research_report/`.
+> **alainbryden** (full end-game autopilot). Per-repo detail lives in `docs/reference/research_report/`.
 
 ---
 
@@ -110,7 +110,7 @@ Keep files only for (a) the MCP bridge we already have and (b) the Singularity R
 - Coordinator/scheduler with RAM auto-scaling + recoveryThreadPadding baked in
 - Target selector (phase-aware: payback-period ranking late, per-thread efficiency early)
 - pserv/hacknet/home-upgrade managers with time-decay budget
-- Monitoring dashboard + notification bus (see `ui_plan.md`)
+- Monitoring dashboard + notification bus (built as the control console, see [08-control-console.md](08-control-console.md); original scratch notes `docs/archive/ui_plan.md`)
 
 **TOOLCHAIN:**
 - Evaluate **viteburner** (inigo) — file-save hot-push to game. Possible upgrade to our bridge.

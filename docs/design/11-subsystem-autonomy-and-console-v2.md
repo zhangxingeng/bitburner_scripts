@@ -8,7 +8,7 @@
 - **T2 — Deepen + harden the brain:** wire the existing-but-manual pieces into the sequencer, generalize the launch model, add tests.
 - **T3 — Console v2:** surface every subsystem + richer display (overview, charts, audit log) and more decision types.
 
-**Companions:** [[05-thread-p-sequencing]] (the brain), [[08-control-console]] (the surface), [[10-parallel-build-playbook]] (the process). Reference impls live in `example_code_dump/alainbryden-*`; analyses in `research_report/`.
+**Companions:** [[05-thread-p-sequencing]] (the brain), [[08-control-console]] (the surface), [[10-parallel-build-playbook]] (the process). Reference impls live in `example_code_dump/alainbryden-*`; analyses in `docs/reference/research_report/`.
 
 ---
 
@@ -93,7 +93,7 @@ A lightweight node-runnable harness dir (`test/`) + one example test (e.g. subsy
 
 ## §4 Wave 1 — parallel agents (worktrees, disjoint files)
 
-Each manager agent: **study `example_code_dump/alainbryden-<x>.js` + `research_report/alainbryden-player.md` first**, implement `src/player/<x>_manager.ts` ONLY, self-guard on SF/BitNode availability (publish `available:false` + exit cleanly when absent), follow the faction_manager crash-guard/log shape, publish `SubsystemStatus` each loop, surface irreversible/scarce spends as decisions (don't auto-spend beyond safe rules). RAM-light; route Singularity/feature calls through `ns_dodge` where needed.
+Each manager agent: **study `example_code_dump/alainbryden-<x>.js` + `docs/reference/research_report/alainbryden-player.md` first**, implement `src/player/<x>_manager.ts` ONLY, self-guard on SF/BitNode availability (publish `available:false` + exit cleanly when absent), follow the faction_manager crash-guard/log shape, publish `SubsystemStatus` each loop, surface irreversible/scarce spends as decisions (don't auto-spend beyond safe rules). RAM-light; route Singularity/feature calls through `ns_dodge` where needed.
 
 | Agent | Owns | Notes |
 |---|---|---|

@@ -96,16 +96,16 @@ On a fresh 8 GB home, some scripts won't fit alongside game_agent. The bootstrap
 
 **Scope reminder (2026-07-01):** all of this is dev/debug tooling — pushing code, reading state,
 debugging the running game from outside it. It is never a runtime dependency of `brain.ts`
-(the actual autonomous gameplay entry point). See `docs/mcp-control-channel-usage.md` §0.
+(the actual autonomous gameplay entry point). See `docs/mcp/mcp-control-channel-usage.md` §0.
 
 ### Two paths: fast control channel, slow file-relay fallback (updated 2026-07-01)
 This section used to describe ONLY the file-relay path as if it were the sole mechanism — that
-was true before the WebSocket control channel was built (`docs/plan-mcp-realtime-control.md`).
+was true before the WebSocket control channel was built (`docs/mcp/plan-mcp-realtime-control.md`).
 Current reality: `terminal`/`read_port`/`write_port` MCP tools prefer the **control channel**
 (`cross/game_agent.ts` dials out to the bridge's `:12527` control socket, ~10ms round-trip) and
 transparently fall back to the **file-relay** (`/status/.cmd.json` → `game_agent.ts` polls and
 executes → `/status/.result.json`, ~hundreds of ms) only when the control channel is down. See
-`docs/mcp-control-channel-usage.md` for the full picture — that doc is the canonical, current
+`docs/mcp/mcp-control-channel-usage.md` for the full picture — that doc is the canonical, current
 reference for this whole subsystem.
 
 ### Ports fill up (50 entry limit)

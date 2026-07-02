@@ -13,7 +13,8 @@ import { PORT_NOTIFY, pushPort } from '../lib/ports';
  * Optional file writes (if caller passes ns.write) add ~1 GB — avoid in tight scripts.
  *
  * PORT_NOTIFY consumers: game_agent (drains to status/notifications.json),
- *                        future dashboard (React inject, ui_plan.md).
+ *                        future dashboard (React inject — see docs/design/08-control-console.md;
+ *                        docs/archive/ui_plan.md has the original scratch notes).
  */
 
 // ── Types ─────────────────────────────────────────────────────────────────────

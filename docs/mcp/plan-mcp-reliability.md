@@ -1,8 +1,8 @@
 # Plan: MCP Reliability & Performance Fix
 
 > **This doc is now the PROBLEM ANALYSIS / root-cause record.** The executable BUILD PLAN that fixed
-> Problems 1 & 2 lives in **`docs/plan-mcp-realtime-control.md`** (ratified 2026-06-29: in-game WebSocket
-> control channel + RFA fallback). To *use* the channel, see **`docs/mcp-control-channel-usage.md`**.
+> Problems 1 & 2 lives in **`plan-mcp-realtime-control.md`** (ratified 2026-06-29: in-game WebSocket
+> control channel + RFA fallback). To *use* the channel, see **`mcp-control-channel-usage.md`**.
 >
 > ## ✅ STATUS (2026-06-29): Problems 1 & 2 RESOLVED, validated in-game.
 > - **Problem 1 (`write_port` "Port full"):** fixed — clean write reports `{evicted:null}`, read-back correct.
@@ -123,7 +123,7 @@ player modules (all on home), this is fine.
 
 1. ~~**Fix Problem 1**~~ ✅ DONE — `writePort` v3 semantics corrected; control path returns `{evicted}`.
 2. ~~**Investigate Problem 2**~~ ✅ DONE — replaced the file relay with the in-game WebSocket control
-   channel (`docs/plan-mcp-realtime-control.md`); ~10 ms round-trips, sub-ms state reads.
+   channel (`plan-mcp-realtime-control.md`); ~10 ms round-trips, sub-ms state reads.
 3. **Fix Problem 3** (player module RAM) — STILL OPEN. Audit imports for each `player/` module, cut heavy
    deps, re-validate RAM numbers in-game. This is the next reliability task (Phase 5 in the build plan).
 4. Problem 4 is already handled correctly — no action needed.

@@ -8,7 +8,7 @@
 >
 > Prereqs: [00-architecture-philosophy.md](00-architecture-philosophy.md) §2.5 (capability
 > boundary), [04-player-automation-and-control.md](04-player-automation-and-control.md) §4
-> (MCP control surface), [mcp-control-channel-usage.md](../mcp-control-channel-usage.md) §4
+> (MCP control surface), [mcp-control-channel-usage.md](../mcp/mcp-control-channel-usage.md) §4
 > (toolbox).
 
 ---

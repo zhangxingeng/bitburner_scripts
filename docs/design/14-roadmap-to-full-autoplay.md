@@ -66,7 +66,7 @@ doc is the canonical "current state" reference:
   `bootstrap.ts` daemon launcher never subtracted the home RAM reservation at all, while the compute
   stack (`RamManager`) always had — the two disagreed about how much home RAM was actually free.
 - **MCP is explicitly scoped as dev/debug tooling only**, never a runtime dependency of `brain.ts` —
-  see `docs/mcp-control-channel-usage.md` §0.
+  see `docs/mcp/mcp-control-channel-usage.md` §0.
 - This does not change §2–§7 below — the reset loop, nav/action layer, crime, company work, and
   BitNode selection gaps are orthogonal to this pivot and remain exactly as described. Round 1's
   scope (§4) is unaffected except where noted inline (tracks 1C and 1G, below).

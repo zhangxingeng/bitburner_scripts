@@ -291,4 +291,4 @@ The line is "what's painted on screen" vs "what's in the engine.")
 *Amended 2026-07-01: §3's DOM law now names two canonical files (see §3), not one; §3a's daemon-spawning
 owner is `brain.ts`/`lib/daemon_launcher.ts`, not `bootstrap.ts` (deleted — see [14](14-roadmap-to-full-autoplay.md)).
 MCP's role is dev/debug tooling only, never a runtime dependency of `brain.ts` — see
-[mcp-control-channel-usage.md](../mcp-control-channel-usage.md) §0.*
+[mcp-control-channel-usage.md](../mcp/mcp-control-channel-usage.md) §0.*

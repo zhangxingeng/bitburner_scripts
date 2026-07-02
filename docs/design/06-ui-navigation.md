@@ -1,6 +1,6 @@
 # Design 06 — In-Game UI Navigation & Injection (the Navigator)
 
-**Status:** RATIFIED (plan + scope approved 2026-06-30). Build pending. Doc-first capture of ground truth from the game source so it survives context compaction.
+**Status:** RATIFIED (plan + scope approved 2026-06-30). **Built** — `src/lib/navigator.ts` implements this Navigator (`goTo`/`ensureTerminal`), consumed by `lib/dom.ts::navToPage` and `docs/design/14`. Doc-first capture of ground truth from the game source so it survives context compaction.
 
 **Companion notes:** [[05-thread-p-sequencing]] (the brain this serves), 07-dev-loop-tooling (browser/Playwright verification — the external dev loop).
 

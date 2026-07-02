@@ -1,6 +1,6 @@
 # Design 07 — Browser Dev Loop & Verification Tooling (Playwright + Sonnet multiplexing)
 
-**Status:** RATIFIED (plan + approach approved 2026-06-30). Setup pending (post-compaction). Doc-first capture so it survives context compaction.
+**Status:** RATIFIED (plan + approach approved 2026-06-30). **Set up** — `.mcp.json` already configures the Playwright MCP server per §2 below. Doc-first capture so it survives context compaction.
 
 **Companion notes:** [[06-ui-navigation]] (what we verify with this loop), [[05-thread-p-sequencing]] (the brain).
 

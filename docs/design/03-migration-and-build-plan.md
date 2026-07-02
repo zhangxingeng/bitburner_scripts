@@ -2,7 +2,7 @@
 
 > Grounds [02-system-architecture.md](02-system-architecture.md) in code. Big picture +
 > what's DONE (as references) + what's ACTIVE. Per-file migration history:
-> `research_report/existing-src-inventory.md`. **Rule: single source of truth — no residue.**
+> `docs/reference/research_report/existing-src-inventory.md`. **Rule: single source of truth — no residue.**
 
 ---
 
@@ -53,7 +53,7 @@ Make the clean architecture actually run end-to-end and validate in-game.
 gang (`ns.formulas.gang`, Zharay) → sleeve (inigo state machine) → bladeburner (alainbryden success-threshold) → stanek. Then **reset/aug-install recommender** (notify, doc 00 §3) → eventually full-auto orchestration.
 
 ### C. Dashboard UI
-React monitoring dashboard per [ui_plan.md](../../ui_plan.md). Replaces `cross/reporter.ts` file-dump placeholder. DOM-injection (overview hooks), live server table, notification surface (`PORT_NOTIFY`).
+React monitoring dashboard, built as the control console (see [08-control-console.md](08-control-console.md); original scratch notes [ui_plan.md](../archive/ui_plan.md)). Still to fully replace `cross/reporter.ts`'s file-dump placeholder — see `docs/TODO.md`. DOM-injection (overview hooks), live server table, notification surface (`PORT_NOTIFY`).
 
 ### D. Quality Pass — deferred `TODO(design)` registry (single source of truth)
 | File | Deferred item | Learn-from |
@@ -63,7 +63,7 @@ React monitoring dashboard per [ui_plan.md](../../ui_plan.md). Replaces `cross/r
 | compute/scheduler.ts | bus task-event accounting; arbitraryExecution bin-packing | alainbryden |
 | compute/target_selector.ts | per-thread-efficiency (EARLY) / payback-period (LATE) ranking | inigo/Jrpl |
 | compute/hacknet_manager.ts | hash-spend logic | alainbryden |
-| cross/reporter.ts | → see workstream C | ui_plan.md |
+| cross/reporter.ts | → see workstream C | docs/archive/ui_plan.md |
 | stock/main.ts | track purchase-time profitPotential → profitChange (sell signal) | Zharay |
 | player/faction_manager.ts | company-work restore; idle karma-grind fallback; full 9-scope strategy | alainbryden |
 | player/aug_planner.ts | SF11 cost-multiplier reduction; donation unlock; stat-desired filtering | alainbryden |

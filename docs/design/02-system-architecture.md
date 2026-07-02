@@ -97,7 +97,7 @@ Spine chosen by user = **Core loop end-to-end** before side-engines.
 3. **HWGW batcher** (inigo class skeleton + alainbryden timing math + bin-packing). Activates at MID.
 4. **Infra managers:** pserv (time-decay budget), hacknet (ROI), home-upgrade, RAM auto-scale + recoveryThreadPadding.
 5. **Stock engine** (primary early income; pre-4S model now, 4S + market-manipulation coupling later).
-6. **Monitoring UI + notification bus** (`ui_plan.md`) — so we can watch everything above.
+6. **Monitoring UI + notification bus** (built as the control console, see [08-control-console.md](08-control-console.md); original scratch notes `docs/archive/ui_plan.md`) — so we can watch everything above.
 7. **Thread-P modules (user-invoked):** factionManager, workManager, programAcquirer, augPlanner (Singularity + RAM-dodge).
 8. **Side-engines:** gang → sleeve → bladeburner → stanek.
 9. **Reset/aug-install recommender** (notify) → eventually full-auto orchestration.
