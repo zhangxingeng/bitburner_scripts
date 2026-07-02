@@ -1,4 +1,7 @@
-import { NS, FactionWorkType } from '@ns';
+import {
+    NS, FactionWorkType, CompanyName, JobField, JobName,
+    PlayerRequirement, CompanyReputationRequirement,
+} from '@ns';
 import { formatTime, shortNumber } from '../lib/format';
 import { executeCommand } from '../lib/ns_dodge';
 import { hasSF4 } from '../lib/sf_check';
@@ -65,6 +68,7 @@ const IDLE_SLEEP_MS             = 30_000;
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface FactionWorkTarget {
+    type:          'FACTION';
     factionName:   string;
     augName:       string;
     repNeeded:     number;
@@ -73,15 +77,39 @@ interface FactionWorkTarget {
     timeRemaining: number; // seconds
 }
 
+/**
+ * A gate on joining `gatedFaction`: the player must reach `repNeeded` reputation
+ * with `companyName` (via employment there) to unlock the faction invitation.
+ */
+interface CompanyWorkTarget {
+    type:          'COMPANY';
+    companyName:   CompanyName;
+    gatedFaction:  string;
+    field:         JobField;
+    repNeeded:     number;
+    repCurrent:    number;
+    repPerSecond:  number;
+    timeRemaining: number; // seconds
+}
+
+type WorkTarget = FactionWorkTarget | CompanyWorkTarget;
+
 interface CurrentWork {
     type:             'FACTION' | 'COMPANY' | '';
     factionName?:     string;
     factionWorkType?: FactionWorkType;
-    companyName?:     string;
+    companyName?:     CompanyName;
 }
 
-/** Module-level rep-gain rate cache (per faction). */
+/** Module-level rep-gain rate cache (per faction, and per "company:<name>" key). */
 const repRateCache = new Map<string, { rate: number; timestamp: number }>();
+
+/**
+ * Module-level cache of the (single) companyReputation gate requirement found in
+ * each faction's invite requirement tree — null when a faction has no such gate.
+ * Static per faction, so this is fetched via ns_dodge only once per faction ever.
+ */
+const companyGateCache = new Map<string, CompanyReputationRequirement | null>();
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -123,8 +151,9 @@ export async function main(ns: NS): Promise<void> {
                 ns.print(`No work at scope ${scope} — expanding to scope ${scope + 1}`);
                 scope++;
             } else {
-                ns.print(`No faction work available at any scope. Waiting ${IDLE_SLEEP_MS / 1000}s.`);
-                // TODO(design): fall back to player/crime.js karma grind when idle here
+                ns.print(`No faction or company-gate work available at any scope. Waiting ${IDLE_SLEEP_MS / 1000}s.`);
+                // Idle karma grinding (crime.ts) runs as its own independently
+                // auto-toggle-gated daemon; it is not launched or referenced here.
                 await ns.sleep(IDLE_SLEEP_MS);
                 scope = 1;
             }
@@ -134,7 +163,11 @@ export async function main(ns: NS): Promise<void> {
 
         // Work found — reset scope and execute
         scope = 1;
-        ns.print(`\nTarget: ${target.factionName} for aug "${target.augName}"`);
+        if (target.type === 'FACTION') {
+            ns.print(`\nTarget: ${target.factionName} for aug "${target.augName}"`);
+        } else {
+            ns.print(`\nTarget: ${target.companyName} rep to unlock faction "${target.gatedFaction}"`);
+        }
         ns.print(`Rep: ${shortNumber(target.repCurrent)} / ${shortNumber(target.repNeeded)}`);
         ns.print(`ETA: ${formatTime(target.timeRemaining * 1000)}`);
 
@@ -164,7 +197,7 @@ async function findBestTarget(
     ns: NS,
     scope: number,
     measureRepRates: boolean,
-): Promise<FactionWorkTarget | null> {
+): Promise<WorkTarget | null> {
     const player     = ns.getPlayer();
     // Cast FactionName[] → string[] so we can compare freely with our string constants.
     const allJoined  = [...player.factions] as string[];
@@ -210,6 +243,7 @@ async function findBestTarget(
             if (currentRep >= repNeeded || repPerSecond <= 0) continue;
 
             targets.push({
+                type:          'FACTION',
                 factionName:   faction,
                 augName:       aug,
                 repNeeded,
@@ -220,23 +254,125 @@ async function findBestTarget(
         }
     }
 
-    // Keep only the fastest aug per faction, then sort ascending by ETA.
+    // Keep only the fastest aug per faction.
     const byFaction = new Map<string, FactionWorkTarget>();
     for (const t of targets) {
         const prev = byFaction.get(t.factionName);
         if (!prev || t.timeRemaining < prev.timeRemaining) byFaction.set(t.factionName, t);
     }
 
-    const sorted = Array.from(byFaction.values()).sort((a, b) => a.timeRemaining - b.timeRemaining);
+    // Merge in company-reputation gates for not-yet-joined factions so that
+    // company-gate work and faction-rep work compete fairly for the one work slot.
+    const companyTargets = await findCompanyGateTargets(ns, measureRepRates);
+
+    const merged: WorkTarget[] = [...byFaction.values(), ...companyTargets];
+    const sorted = merged.sort((a, b) => a.timeRemaining - b.timeRemaining);
 
     if (sorted.length > 0) {
-        ns.print('\nFaction priorities (shortest ETA first):');
-        sorted.slice(0, 5).forEach((t, i) =>
-            ns.print(`  ${i + 1}. ${t.factionName} — ${t.augName} (${formatTime(t.timeRemaining * 1000)})`),
-        );
+        ns.print('\nWork priorities (shortest ETA first):');
+        sorted.slice(0, 5).forEach((t, i) => {
+            const label = t.type === 'FACTION'
+                ? `${t.factionName} — ${t.augName}`
+                : `${t.companyName} rep → unlock ${t.gatedFaction}`;
+            ns.print(`  ${i + 1}. ${label} (${formatTime(t.timeRemaining * 1000)})`);
+        });
     }
 
     return sorted[0] ?? null;
+}
+
+// ── Company-reputation gates ───────────────────────────────────────────────────
+
+/**
+ * Recursively walk a faction invite requirement tree looking for a
+ * `companyReputation` leaf requirement. `not`-typed requirements are ignored
+ * (per this file's existing partial-coverage precedent in checkPrerequisites);
+ * `everyCondition`/`someCondition` both recurse into their `.conditions` array,
+ * returning the first companyReputation leaf found.
+ */
+function findCompanyReputationRequirement(
+    requirements: PlayerRequirement[],
+): CompanyReputationRequirement | null {
+    for (const req of requirements) {
+        if (req.type === 'companyReputation') return req;
+        if (req.type === 'everyCondition' || req.type === 'someCondition') {
+            const found = findCompanyReputationRequirement(req.conditions);
+            if (found) return found;
+        }
+        // 'not' and other leaf requirement types are not relevant here.
+    }
+    return null;
+}
+
+/**
+ * Fetch (and cache) the companyReputation gate — if any — blocking invitation
+ * to `faction`. Cached forever per faction since invite requirements are static
+ * and re-fetching would spin up a real temp script via ns_dodge every tick.
+ */
+async function getCompanyGateRequirement(
+    ns: NS, faction: string,
+): Promise<CompanyReputationRequirement | null> {
+    if (companyGateCache.has(faction)) return companyGateCache.get(faction) ?? null;
+
+    const requirements = await executeCommand<PlayerRequirement[]>(
+        ns, `ns.singularity.getFactionInviteRequirements("${faction}")`,
+    ) ?? [];
+    const gate = findCompanyReputationRequirement(requirements);
+    companyGateCache.set(faction, gate);
+    return gate;
+}
+
+/**
+ * Build work targets for every not-yet-joined FACTION_PRIORITY faction that is
+ * gated behind a companyReputation requirement we haven't yet satisfied.
+ */
+async function findCompanyGateTargets(
+    ns: NS,
+    measureRepRates: boolean,
+): Promise<CompanyWorkTarget[]> {
+    const player    = ns.getPlayer();
+    const allJoined = [...player.factions] as string[];
+
+    const targets: CompanyWorkTarget[] = [];
+
+    for (const faction of FACTION_PRIORITY) {
+        if (allJoined.includes(faction)) continue;
+
+        const gate = await getCompanyGateRequirement(ns, faction);
+        if (!gate) continue;
+
+        const companyName = gate.company;
+        const repCurrent = await executeCommand<number>(
+            ns, `ns.singularity.getCompanyRep("${companyName}")`,
+        ) ?? 0;
+        if (repCurrent >= gate.reputation) continue; // Gate already satisfied.
+
+        const field = await resolveCompanyField(ns, companyName);
+
+        let repPerSecond: number;
+        const cacheKey = `company:${companyName}`;
+        const cached   = repRateCache.get(cacheKey);
+        if (!measureRepRates && cached) {
+            repPerSecond = cached.rate;
+        } else {
+            repPerSecond = await measureCompanyRepGainRate(ns, companyName, field);
+            repRateCache.set(cacheKey, { rate: repPerSecond, timestamp: Date.now() });
+        }
+        if (repPerSecond <= 0) continue;
+
+        targets.push({
+            type:          'COMPANY',
+            companyName,
+            gatedFaction:  faction,
+            field,
+            repNeeded:     gate.reputation,
+            repCurrent,
+            repPerSecond,
+            timeRemaining: (gate.reputation - repCurrent) / repPerSecond,
+        });
+    }
+
+    return targets;
 }
 
 // ── Prerequisites ─────────────────────────────────────────────────────────────
@@ -280,7 +416,7 @@ async function checkPrerequisites(ns: NS, faction: string): Promise<boolean> {
         if (karma > GANG_KARMA_THRESHOLD) {
             ns.print(
                 `${faction} needs karma ≤ ${GANG_KARMA_THRESHOLD} (current: ${shortNumber(karma)}). ` +
-                'Run /player/crime.js to grind karma.',
+                'Waiting for karma to grind down independently (crime.ts).',
             );
             return false;
         }
@@ -291,8 +427,17 @@ async function checkPrerequisites(ns: NS, faction: string): Promise<boolean> {
 
 // ── Continuous work loop ──────────────────────────────────────────────────────
 
+/** Dispatch to the faction- or company-work loop, whichever the target needs. */
+async function workContinuously(ns: NS, target: WorkTarget): Promise<void> {
+    if (target.type === 'FACTION') {
+        await workForFactionContinuously(ns, target);
+    } else {
+        await workForCompanyContinuously(ns, target);
+    }
+}
+
 /** Work for the target faction until the required rep is reached. */
-async function workContinuously(ns: NS, target: FactionWorkTarget): Promise<void> {
+async function workForFactionContinuously(ns: NS, target: FactionWorkTarget): Promise<void> {
     const focused  = await executeCommand<boolean>(ns, 'ns.singularity.isFocused()') ?? false;
     const workType = chooseBestWorkType(ns, target.factionName);
 
@@ -343,6 +488,61 @@ async function workContinuously(ns: NS, target: FactionWorkTarget): Promise<void
     }
 }
 
+/** Work for the target company until enough reputation is banked to unlock its gated faction. */
+async function workForCompanyContinuously(ns: NS, target: CompanyWorkTarget): Promise<void> {
+    const focused = await executeCommand<boolean>(ns, 'ns.singularity.isFocused()') ?? false;
+
+    if (!await startWorkForCompany(ns, target.companyName, target.field, focused)) {
+        ns.print(`Failed to start working for ${target.companyName}. Retrying next tick.`);
+        await ns.sleep(5_000);
+        return;
+    }
+
+    const workDeadline = Date.now() + target.timeRemaining * 1000 * (1 + TIME_MARGIN_PERCENT);
+    const startTime    = Date.now();
+    const startRep     = target.repCurrent;
+
+    while (true) {
+        // Check work wasn't interrupted by something else.
+        if (!await isWorkingForCompany(ns, target.companyName)) {
+            ns.print(`Work interrupted for ${target.companyName} — restarting`);
+            if (!await startWorkForCompany(ns, target.companyName, target.field, focused)) return;
+        }
+
+        const currentRep = await executeCommand<number>(
+            ns, `ns.singularity.getCompanyRep("${target.companyName}")`,
+        ) ?? 0;
+        const elapsed = Date.now() - startTime;
+
+        if (currentRep >= target.repNeeded) {
+            ns.print(
+                `SUCCESS: Reached rep ${shortNumber(target.repNeeded)} with ${target.companyName} ` +
+                `(unlocks ${target.gatedFaction} invite)`,
+            );
+            return; // joinEligibleFactions() picks up the new invite next tick.
+        }
+
+        if (Date.now() >= workDeadline) {
+            const actualRate = (currentRep - startRep) / (elapsed / 1000);
+            ns.print(
+                `Time allocation for ${target.companyName} elapsed. ` +
+                `Actual rate: ${shortNumber(actualRate)}/s vs expected ${shortNumber(target.repPerSecond)}/s`,
+            );
+            return;
+        }
+
+        const pct       = ((currentRep / target.repNeeded) * 100).toFixed(1);
+        const remaining = (target.repNeeded - currentRep) / target.repPerSecond;
+        ns.print(
+            `${target.companyName}: ${shortNumber(currentRep)}/${shortNumber(target.repNeeded)} ` +
+            `(${pct}%) | ETA ${formatTime(remaining * 1000)} | elapsed ${formatTime(elapsed)} ` +
+            `| unlocks ${target.gatedFaction}`,
+        );
+
+        await ns.sleep(STATUS_UPDATE_INTERVAL_MS);
+    }
+}
+
 // ── Rep-gain measurement ──────────────────────────────────────────────────────
 
 /**
@@ -364,6 +564,24 @@ async function measureRepGainRate(ns: NS, faction: string): Promise<number> {
     return (after - before) * (1000 / MEASUREMENT_DURATION_MS);
 }
 
+/**
+ * Temporarily start working for a company, measure rep/s for 1 s, then restore
+ * the previous action. Returns rep per second.
+ */
+async function measureCompanyRepGainRate(ns: NS, companyName: CompanyName, field: JobField): Promise<number> {
+    const savedWork  = await executeCommand<CurrentWork | null>(ns, 'ns.singularity.getCurrentWork()');
+    const wasFocused = await executeCommand<boolean>(ns, 'ns.singularity.isFocused()') ?? false;
+
+    if (!await startWorkForCompany(ns, companyName, field, wasFocused)) return 0;
+
+    const before = await executeCommand<number>(ns, `ns.singularity.getCompanyRep("${companyName}")`) ?? 0;
+    await ns.sleep(MEASUREMENT_DURATION_MS);
+    const after  = await executeCommand<number>(ns, `ns.singularity.getCompanyRep("${companyName}")`) ?? 0;
+
+    await restorePreviousWork(ns, savedWork, wasFocused);
+    return (after - before) * (1000 / MEASUREMENT_DURATION_MS);
+}
+
 async function restorePreviousWork(ns: NS, work: CurrentWork | null, focused: boolean): Promise<void> {
     if (!work?.type) {
         await executeCommand(ns, 'ns.singularity.stopAction()');
@@ -372,8 +590,11 @@ async function restorePreviousWork(ns: NS, work: CurrentWork | null, focused: bo
     if (work.type === 'FACTION' && work.factionName && work.factionWorkType) {
         await startWorkForFaction(ns, work.factionName, work.factionWorkType, focused);
     } else if (work.type === 'COMPANY' && work.companyName) {
-        // TODO(design): work-for-company not yet implemented
-        await executeCommand(ns, 'ns.singularity.stopAction()');
+        // Reuse whatever field the player is already employed under at this
+        // company — applyToCompany with a different field would restart them
+        // at that ladder's entry position and discard promotion progress.
+        const field = await resolveCompanyField(ns, work.companyName);
+        await startWorkForCompany(ns, work.companyName, field, focused);
     } else {
         await executeCommand(ns, 'ns.singularity.stopAction()');
     }
@@ -403,6 +624,33 @@ function chooseBestWorkType(ns: NS, faction: string): FactionWorkType {
     return (player.skills.charisma >= combatAvg ? 'security' : 'field') as FactionWorkType;
 }
 
+/**
+ * Pick a company job field ('Software' vs 'Business') via the same
+ * hacking-vs-charisma heuristic chooseBestWorkType() uses for mixed factions.
+ */
+function chooseCompanyField(ns: NS): JobField {
+    const player = ns.getPlayer();
+    return (player.skills.hacking >= player.skills.charisma ? 'Software' : 'Business') as JobField;
+}
+
+/**
+ * Resolve the job field to use at `companyName`. If the player is already
+ * employed there, reuse THAT job's field (recovered via getCompanyPositionInfo)
+ * so repeat applyToCompany calls auto-promote up the same ladder instead of
+ * restarting them at a different ladder's entry position.
+ */
+async function resolveCompanyField(ns: NS, companyName: CompanyName): Promise<JobField> {
+    const player     = ns.getPlayer();
+    const currentJob = player.jobs[companyName];
+    if (currentJob) {
+        const info = await executeCommand<{ field: JobField } | null>(
+            ns, `ns.singularity.getCompanyPositionInfo("${companyName}", "${currentJob}")`,
+        );
+        if (info?.field) return info.field;
+    }
+    return chooseCompanyField(ns);
+}
+
 // ── Singularity wrappers ──────────────────────────────────────────────────────
 
 async function startWorkForFaction(
@@ -416,4 +664,26 @@ async function startWorkForFaction(
 async function isWorkingForFaction(ns: NS, factionName: string): Promise<boolean> {
     const work = await executeCommand<CurrentWork | null>(ns, 'ns.singularity.getCurrentWork()');
     return work?.type === 'FACTION' && work.factionName === factionName;
+}
+
+/**
+ * Apply to `companyName` under `field` (a no-op promotion attempt if already
+ * employed there under that same field — see resolveCompanyField), then start
+ * working. Never call this with a field other than the one resolved for an
+ * already-held job at that company.
+ */
+async function startWorkForCompany(
+    ns: NS, companyName: CompanyName, field: JobField, focus: boolean,
+): Promise<boolean> {
+    await executeCommand<JobName | null>(
+        ns, `ns.singularity.applyToCompany("${companyName}", "${field}")`,
+    );
+    return await executeCommand<boolean>(
+        ns, `ns.singularity.workForCompany("${companyName}", ${focus})`,
+    ) ?? false;
+}
+
+async function isWorkingForCompany(ns: NS, companyName: CompanyName): Promise<boolean> {
+    const work = await executeCommand<CurrentWork | null>(ns, 'ns.singularity.getCurrentWork()');
+    return work?.type === 'COMPANY' && work.companyName === companyName;
 }
