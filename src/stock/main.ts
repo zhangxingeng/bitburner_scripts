@@ -24,9 +24,9 @@ interface StockPosition {
     /** profitPotential = volatility * (forecast - 0.5); Zharay formula (unadjusted).
      *  Positive = bullish (grow the underlying), negative = bearish (hack it). */
     profitPotential: number;
-    /** Change in profitPotential since position was opened.
-     *  TODO(design): track purchaseProfitPotential in Stock when a buy executes so
-     *  the coordinator can detect momentum decay (>-25% = sell long; >+25% = sell short). */
+    /** Change in profitPotential since position was opened: see Stock.profitChange().
+     *  Momentum decay (<-25% long / >+25% short) is also used by trader.ts's
+     *  checkPositionManagement() as a sell trigger. */
     profitChange:    number;
 }
 
@@ -47,7 +47,7 @@ function reportPositions(ns: NS, market: StockMarket): void {
         long:            stock.sharesLong > 0,
         short:           stock.sharesShort > 0,
         profitPotential: stock.profitPotential(),
-        profitChange:    0, // TODO(design): see StockPosition.profitChange above
+        profitChange:    stock.profitChange(),
     }));
 
     clearPort(ns, PORT_STOCK);

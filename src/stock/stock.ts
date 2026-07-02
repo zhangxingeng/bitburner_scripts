@@ -23,6 +23,7 @@ export class Stock {
     public isShort: boolean = false;
     public purchasePrice?: number;
     public totalCost?: number;
+    public purchaseProfitPotential?: number;
 
     // Analytics and forecast
     public forecast: number = 0.5;
@@ -142,5 +143,15 @@ export class Stock {
      */
     profitPotential(): number {
         return this.volatility * (this.forecast - 0.5);
+    }
+
+    /**
+     * Relative change in profitPotential() since the position was opened.
+     * Positive = momentum improved since purchase, negative = momentum decayed.
+     * Returns 0 if purchaseProfitPotential wasn't captured or was 0 (undefined ratio).
+     */
+    profitChange(): number {
+        if (!this.purchaseProfitPotential) return 0;
+        return (this.profitPotential() - this.purchaseProfitPotential) / Math.abs(this.purchaseProfitPotential);
     }
 } 

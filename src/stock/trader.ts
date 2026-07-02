@@ -247,8 +247,10 @@ export class StockTrader {
 
         // Check if trailing stop is triggered
         if (!stock.isShort && stock.highPrice && currentPrice < stock.highPrice * (1 - adjustedTrailingStop)) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
             return true;
         } else if (stock.isShort && stock.highPrice && currentPrice > stock.highPrice * (1 + adjustedTrailingStop)) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Trailing stop triggered`);
             return true;
         }
 
@@ -270,6 +272,7 @@ export class StockTrader {
 
         // Take profit condition
         if (profit >= dynamicTargetProfit && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Dynamic profit target reached`);
             return true;
         }
 
@@ -278,6 +281,7 @@ export class StockTrader {
 
         // Stop loss - don't wait for minimum hold time for stop loss
         if (profit <= -dynamicStopLoss) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Stop loss triggered`);
             return true;
         }
 
@@ -292,11 +296,26 @@ export class StockTrader {
 
         // Exit on forecast change if we've held long enough
         if (forecastChanged && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Forecast deteriorated`);
             return true;
         }
 
         // Exit on high probability of market cycle reversal if profitable
         if (isCycleEnd && cycleProbability > 0.8 && profit > 0.02 && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Market cycle reversal detected`);
+            return true;
+        }
+
+        // Momentum decay: profitPotential() has decayed (long) or improved against us
+        // (short) by more than 25% relative to its value at purchase time. Gated behind
+        // shouldConsiderSelling like the profit-target/forecast checks above so we don't
+        // over-react to single-tick forecast noise right after a fresh buy.
+        const profitChange = stock.profitChange();
+        const momentumDecayed = stock.isShort ? profitChange > 0.25 : profitChange < -0.25;
+
+        if (momentumDecayed && shouldConsiderSelling) {
+            this.ns.print(`Position management EXIT (${stock.symbol}): Momentum decay ` +
+                `(profitChange ${(profitChange * 100).toFixed(1)}%)`);
             return true;
         }
 
@@ -352,6 +371,12 @@ export class StockTrader {
 
         if (forecastChangeFromInitial > this.config.tradingParams.forecastChangeThreshold) {
             return 'Forecast changed direction';
+        }
+
+        const profitChange = stock.profitChange();
+        const momentumDecayed = stock.isShort ? profitChange > 0.25 : profitChange < -0.25;
+        if (momentumDecayed) {
+            return 'Momentum decay';
         }
 
         return 'Multiple factors';
